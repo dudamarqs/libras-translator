@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "libras-translator"
+version = "0.1.0"
+description = "Tradutor de Libras em tempo real: webcam -> MediaPipe -> classificador -> texto"
+requires-python = ">=3.12,<3.13"
+
+# NOTA: as dependencias reais vivem em requirements.txt (com versoes pinadas).
+# Aqui deixamos vazio de proposito: o pyproject serve, neste projeto, para
+# tornar o pacote `libras` importavel -- nao para gerenciar dependencias.
+dependencies = []
+
+# `pip install -e .` registra APENAS o pacote `libras`.
+# Por que isso importa:
+#   sem ele, um script em training/ que faz `import libras` quebra, porque o
+#   Python so procura no diretorio do script. A saida preguicosa e escrever
+#   `sys.path.append("..")` no topo de cada arquivo -- isso funciona ate voce
+#   rodar o script de outra pasta, e ai quebra de um jeito confuso.
+# O modo editavel (-e) aponta para o codigo-fonte: voce edita libras/ e a
+# mudanca vale na hora, sem reinstalar.
+[tool.setuptools.packages.find]
+include = ["libras*"]
+
+# ---------------------------------------------------------------------------
+# Ruff: linter + formatter (substitui flake8 + black + isort num binario so).
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle: erros de estilo
+    "F",   # pyflakes: variavel nao usada, import nao usado, nome indefinido
+    "I",   # isort: ordenacao de imports
+    "UP",  # pyupgrade: sintaxe moderna de Python
+    "B",   # flake8-bugbear: armadilhas comuns (ex: default mutavel)
+]
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

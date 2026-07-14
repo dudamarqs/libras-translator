@@ -1,0 +1,41 @@
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Ambiente --------------------------------------------------------------
+.env
+
+# --- Node / Frontend -------------------------------------------------------
+node_modules/
+frontend/dist/
+
+# --- DADOS E MODELOS -------------------------------------------------------
+# Git NAO e um sistema de versionamento de dados. Ele guarda a historia
+# completa de cada arquivo: um dataset de 500 MB que voce regravou 10 vezes
+# vira um repositorio de 5 GB, para sempre, mesmo que voce delete o arquivo.
+# Datasets e checkpoints ficam FORA do Git (na Etapa 6 discutimos DVC).
+# O ".gitkeep" preserva a pasta vazia na arvore do repo.
+datasets/*
+!datasets/.gitkeep
+!datasets/raw/.gitkeep
+!datasets/processed/.gitkeep
+
+models/*
+!models/.gitkeep
+
+# --- Notebooks -------------------------------------------------------------
+# Notebooks guardam o OUTPUT das celulas dentro do .ipynb (inclusive imagens
+# em base64). Isso polui o diff e incha o repo. Limpe antes de commitar.
+.ipynb_checkpoints/
+
+# --- SO / IDE --------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

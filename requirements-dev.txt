@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+# Dependencias de DESENVOLVIMENTO (nao vao para producao / Docker).
+# Separar isso do requirements.txt nao e purismo: a imagem Docker final
+# fica menor e a superficie de ataque menor. Ninguem precisa de Jupyter
+# rodando dentro do container de producao.
+# ---------------------------------------------------------------------------
+-r requirements.txt
+
+# Experimentacao
+jupyterlab==4.3.5
+matplotlib==3.10.0
+plotly==6.0.0
+
+# Testes
+pytest==8.3.4
+pytest-cov==6.0.0
+httpx==0.28.1          # cliente HTTP usado pelo TestClient do FastAPI
+
+# Qualidade de codigo
+ruff==0.9.6            # linter + formatter (substitui flake8 + black + isort)

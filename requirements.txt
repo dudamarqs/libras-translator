@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Dependencias de RUNTIME (o que o sistema precisa para rodar).
+# Instale com:  .venv\Scripts\python.exe -m pip install -r requirements.txt
+# ---------------------------------------------------------------------------
+
+# --- Visao Computacional ---------------------------------------------------
+# opencv-python: captura da webcam, manipulacao e desenho sobre frames.
+#   Usamos o pacote "-python" (nao o "-contrib") porque nao precisamos dos
+#   modulos extras/patenteados (SIFT, SURF). Menos peso, menos superficie.
+opencv-python==4.12.0.88
+
+# mediapipe: modelos pre-treinados do Google que extraem os landmarks
+#   (as coordenadas 3D das articulacoes) de mao, pose e rosto.
+#   E o nosso extrator de features -- o "transfer learning" do projeto.
+#   VERSAO IMPORTA: <=0.10.21 exige "numpy<2", o que conflita com o
+#   opencv-python moderno (que exige "numpy>=2"). A 0.10.35 aceita numpy 2.
+mediapipe==0.10.35
+
+# --- Numerico / Dados ------------------------------------------------------
+# numpy: array N-dimensional. Toda a matematica de landmarks acontece aqui.
+#   Pinado em 2.2.x: e o intervalo onde opencv (>=2,<2.3) e mediapipe (any)
+#   se encontram. Ver docs/DECISOES.md para o historico desse conflito.
+numpy==2.2.6
+pandas==2.2.3
+
+# --- Machine Learning ------------------------------------------------------
+# scikit-learn: nosso BASELINE. Antes de qualquer rede neural, um
+#   RandomForest/LogisticRegression de 5 linhas define a nota de corte.
+scikit-learn==1.6.1
+
+# torch: a rede neural de verdade (MLP agora, LSTM na fase dinamica).
+#   No Windows, a wheel padrao do PyPI ja e CPU-only -- e o suficiente:
+#   nosso modelo tem poucos milhares de parametros e treina em segundos.
+torch==2.6.0
+
+# --- API -------------------------------------------------------------------
+# fastapi: framework da API. Escolhido por ser async-nativo (essencial para
+#   WebSocket a 30 FPS) e por gerar documentacao OpenAPI automaticamente.
+fastapi==0.115.12
+# uvicorn: o servidor ASGI que efetivamente roda o FastAPI.
+#   O extra [standard] traz o suporte performatico a WebSocket.
+uvicorn[standard]==0.34.0
+# pydantic-settings: configuracao tipada via .env (12-factor app).
+pydantic-settings==2.8.1
+
+# --- Utilidades ------------------------------------------------------------
+# pyyaml: le o registry de sinais (o catalogo declarativo de sinais).
+pyyaml==6.0.2
