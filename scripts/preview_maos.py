@@ -36,7 +36,11 @@ def dump_landmarks(resultado) -> None:  # noqa: ANN001
         return
 
     for mao in resultado.maos:
-        print(f"\n--- mao {mao.lado} (confianca do lado: {mao.confianca_lado:.2f}) ---")
+        print(
+            f"\n--- mao {mao.lado} "
+            f"(o MediaPipe viu '{mao.lado_bruto}' no frame espelhado; "
+            f"confianca {mao.confianca_lado:.2f}) ---"
+        )
         print(f"{'idx':>3} {'nome':<16} {'normalizado (x, y, z)':<28} world em metros (x, y, z)")
         for i in (0, 4, 8, 12, 16, 20):  # pulso + as 5 pontas
             n = mao.landmarks[i]
@@ -55,8 +59,17 @@ def main() -> int:
     crono = Cronometro(janela=30)
     mostrar_indices = False
 
+    config = CameraConfig()
+
     try:
-        with Camera(CameraConfig()) as cam, DetectorMaos(max_maos=2) as detector:
+        with (
+            Camera(config) as cam,
+            # `entrada_espelhada` DERIVADO da config da camera, nao repetido a
+            # mao. Se alguem desligar o espelhamento e esquecer de mexer aqui,
+            # os rotulos "Left"/"Right" sairiam trocados -- sem erro nenhum,
+            # so contaminando o dataset. Amarrar os dois torna isso impossivel.
+            DetectorMaos(max_maos=2, entrada_espelhada=config.espelhar) as detector,
+        ):
             print("q/ESC = sair | i = indices | w = imprimir landmarks\n")
 
             while True:

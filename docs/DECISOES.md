@@ -357,3 +357,53 @@ por usarmos um modelo pré-treinado. Isso é o ADR-001 pagando dividendos.
 **O que ainda falta** (fica para a Etapa 7): eles **não** são invariantes a
 **rotação**. Inclinar a mão muda os números. Vamos ter que decidir se
 normalizamos a rotação ou se deixamos o modelo aprender a lidar com ela.
+
+---
+
+## ADR-011 — Corrigir a lateralidade **na fronteira** (revoga uma decisão anterior)
+
+**Data:** 2026-07-14 · **Status:** aceito · **Revoga:** a nota "não vamos
+consertar" que estava em `Mao.lado`
+
+**O sintoma.** O preview mostrava **"Left" sobre a mão direita** do usuário, e
+vice-versa.
+
+**A causa.** Espelhamos o frame na captura (senão sinalizar é desorientador —
+você levanta a direita e ela aparece à esquerda da tela). O MediaPipe recebe o
+frame **já espelhado** e classifica a lateralidade **do que ele vê**: a mão
+direita, espelhada, tem a geometria de uma mão esquerda. Ele responde "Left", e
+está sendo **coerente com a imagem que recebeu**.
+
+**O que eu tinha decidido, e errado.** Deixar como estava, com este comentário
+no código: *"não é um bug e não vamos consertar: é uma convenção, e o que importa
+é ela ser a mesma na coleta, no treino e na inferência; trocar os rótulos só aqui
+é criar duas convenções e escolher a errada em algum lugar."*
+
+A **premissa** está certa — duas convenções concorrentes é desastre. A
+**conclusão** não. Eu só enxerguei duas opções (deixar errado *ou* remendar na
+exibição) e não vi a terceira.
+
+**A decisão.** Corrigir **na fronteira**: no `DetectorMaos._converter`, o único
+ponto por onde os dados do MediaPipe entram no sistema. Assim continua havendo
+**uma só convenção** — e agora ela é **verdadeira**.
+
+**Detalhe que faz a coisa toda funcionar:** trocamos o **rótulo**, nunca a
+**geometria**. Os landmarks continuam vindo da imagem espelhada. A mesma mão real
+produz sempre a mesma geometria **e** o mesmo rótulo, na coleta e na inferência.
+A consistência treino/serving está preservada — que era a preocupação original.
+
+**Salvaguardas.**
+
+- `DetectorMaos(entrada_espelhada=...)` é **explícito** e, nos scripts, é
+  **derivado** de `CameraConfig.espelhar` — não repetido à mão. Se alguém
+  desligasse o espelhamento e esquecesse de ajustar o detector, os rótulos
+  sairiam trocados **sem erro nenhum**, apenas contaminando o dataset.
+- `Mao.lado_bruto` guarda a resposta original do MediaPipe. Se um dia os rótulos
+  parecerem trocados, comparar `lado` com `lado_bruto` diz na hora se o problema
+  é o espelho ou o modelo — diagnóstico em 10 segundos, não em 2 dias.
+- Cinco testes (`TestLateralidade`) travam o comportamento.
+
+**A lição.** Um campo chamado `lado` que diz "Left" para a mão direita é uma
+armadilha esperando alguém — inclusive o você de daqui a três meses, montando o
+dataset. **"É uma convenção" não é desculpa para um nome mentir.** E, mais
+importante: quando as duas opções óbvias são ruins, procure a terceira.

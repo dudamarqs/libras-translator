@@ -102,18 +102,64 @@ CONEXOES: tuple[tuple[int, int], ...] = (
 )  # fmt: skip
 
 
+_OPOSTO: dict[str, str] = {"Left": "Right", "Right": "Left"}
+
+
+def _lado_real(lado_mediapipe: str, *, espelhado: bool) -> str:
+    """Converte a lateralidade que o MediaPipe VIU na lateralidade REAL.
+
+    Num frame espelhado, a mao direita do usuario tem a geometria de uma mao
+    esquerda -- entao o MediaPipe responde "Left". Ele nao esta errado: esta
+    descrevendo corretamente a imagem que recebeu. Quem tem que traduzir de
+    volta para o mundo real somos nos.
+
+    Se o frame NAO foi espelhado, nao ha o que corrigir.
+
+    O `.get(..., lado)` em vez de `[...]`: se um dia o MediaPipe devolver uma
+    categoria inesperada, preferimos passar o valor adiante a estourar um
+    KeyError no meio do loop de captura. Um rotulo estranho e visivel no HUD;
+    uma excecao derruba o sistema inteiro.
+    """
+    if not espelhado:
+        return lado_mediapipe
+    return _OPOSTO.get(lado_mediapipe, lado_mediapipe)
+
+
 @dataclass(slots=True, frozen=True)
 class Mao:
     """Uma mao detectada."""
 
     lado: str
-    """"Left" ou "Right" -- COMO O MEDIAPIPE VE, num frame JA ESPELHADO.
+    """"Left" ou "Right" -- a mao REAL do usuario. Ja corrigido pelo espelho.
 
-    Como espelhamos o frame na captura (ver Camera.ler), o que o MediaPipe chama
-    de "Left" e, na vida real, a sua mao DIREITA. Isso NAO e um bug e nao vamos
-    "consertar": e uma convencao, e o que importa e ela ser a MESMA na coleta,
-    no treino e na inferencia. Trocar os rotulos so aqui, "para ficar certo",
-    e como criar duas convencoes e escolher a errada em algum lugar.
+    POR QUE PRECISA SER CORRIGIDO:
+
+    Espelhamos o frame na captura (Camera.ler) para que sinalizar nao seja
+    desorientador. O MediaPipe entao recebe o frame JA ESPELHADO e classifica a
+    lateralidade DO QUE ELE VE -- e a sua mao direita, espelhada, tem a geometria
+    de uma mao esquerda. Ele responde "Left", coerente com a imagem que recebeu,
+    e errado em relacao ao mundo.
+
+    A primeira versao deste arquivo NAO corrigia isso, com um comentario dizendo
+    que era "so uma convencao" e que troca-la criaria duas convencoes. A premissa
+    estava certa (duas convencoes = desastre); a conclusao, errada. Existe uma
+    terceira opcao: corrigir NA FRONTEIRA -- no unico ponto onde os dados do
+    MediaPipe entram no sistema. Continua havendo UMA convencao, e agora ela e
+    verdadeira.
+
+    Um campo chamado `lado` que diz "Left" para a mao direita e uma armadilha
+    esperando alguem -- inclusive voce, daqui a tres meses, montando o dataset.
+
+    IMPORTANTE: trocamos o ROTULO, nao a GEOMETRIA. Os landmarks continuam vindo
+    da imagem espelhada. A mesma mao real produz sempre a mesma geometria E o
+    mesmo rotulo, na coleta e na inferencia -- a consistencia esta preservada.
+    """
+
+    lado_bruto: str
+    """O que o MediaPipe respondeu, sem correcao. Guardado para depuracao.
+
+    Se um dia os rotulos parecerem trocados, comparar `lado` com `lado_bruto`
+    responde na hora se o problema e o espelho ou o proprio MediaPipe.
     """
 
     confianca_lado: float
@@ -195,13 +241,26 @@ class DetectorMaos:
         conf_presenca: float = 0.5,
         conf_rastreamento: float = 0.5,
         modo_video: bool = True,
+        entrada_espelhada: bool = True,
     ) -> None:
+        """
+        entrada_espelhada:
+            Se os frames que serao passados ao `detectar()` ja vem espelhados.
+            PRECISA CASAR com `CameraConfig.espelhar` -- e o padrao de ambos e
+            True, justamente para que casem sem ninguem precisar pensar.
+
+            Se estiver errado, os rotulos "Left"/"Right" saem trocados. Nao
+            quebra nada, nao levanta excecao: so contamina o dataset. Por isso o
+            `Mao.lado_bruto` guarda a resposta original do MediaPipe -- para
+            voce conseguir diagnosticar isso em 10 segundos, e nao em 2 dias.
+        """
         self.caminho_modelo = caminho_modelo or CAMINHO_MODELO_PADRAO
         self.max_maos = max_maos
         self.conf_deteccao = conf_deteccao
         self.conf_presenca = conf_presenca
         self.conf_rastreamento = conf_rastreamento
         self.modo_video = modo_video
+        self.entrada_espelhada = entrada_espelhada
 
         self._landmarker: HandLandmarker | None = None
         self._ultimo_ts_ms = -1
@@ -300,21 +359,23 @@ class DetectorMaos:
         else:
             bruto = self._landmarker.detect(imagem)
 
-        return self._converter(bruto)
+        return self._converter(bruto, espelhado=self.entrada_espelhada)
 
     @staticmethod
-    def _converter(bruto: HandLandmarkerResult) -> ResultadoMaos:
+    def _converter(bruto: HandLandmarkerResult, *, espelhado: bool) -> ResultadoMaos:
         """Traduz o objeto do MediaPipe para os nossos dataclasses + numpy.
 
-        Por que nao devolver o objeto do MediaPipe direto:
+        Esta e A FRONTEIRA do sistema: o unico ponto por onde os dados do
+        MediaPipe entram. Duas coisas acontecem aqui, e as duas acontecem AQUI
+        justamente por ser um lugar so:
 
-        Isolamento. Se um dia trocarmos o MediaPipe (ou ele mudar de API de novo
-        -- ja mudou uma vez, ver ADR-006), so ESTE metodo muda. Todo o resto do
-        projeto fala com `Mao` e `ResultadoMaos`, que sao nossos.
+        1. Isolamento da API. Se o MediaPipe mudar de novo (ja mudou uma vez --
+           ADR-006), so este metodo muda. O resto do projeto fala com `Mao` e
+           `ResultadoMaos`, que sao nossos.
 
-        E, na pratica, arrays numpy sao o que o resto do pipeline quer: uma
-        lista de objetos com atributos .x/.y/.z teria que ser convertida para
-        array em algum lugar de qualquer jeito. Melhor num lugar so.
+        2. Correcao da lateralidade pelo espelho (ver `Mao.lado`). Corrigir na
+           fronteira mantem UMA convencao no sistema inteiro -- e faz com que
+           ela seja verdadeira.
         """
         maos: list[Mao] = []
 
@@ -328,9 +389,12 @@ class DetectorMaos:
             )
 
             categoria = bruto.handedness[i][0]  # top-1 da classificacao de lado
+            lado_bruto = categoria.category_name
+
             maos.append(
                 Mao(
-                    lado=categoria.category_name,
+                    lado=_lado_real(lado_bruto, espelhado=espelhado),
+                    lado_bruto=lado_bruto,
                     confianca_lado=float(categoria.score),
                     landmarks=normalizados,
                     world=world,

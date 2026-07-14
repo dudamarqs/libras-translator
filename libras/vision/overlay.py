@@ -29,6 +29,11 @@ CINZA = (150, 150, 150)
 
 _FONTE = cv2.FONT_HERSHEY_SIMPLEX
 
+# So para EXIBIR. Internamente o projeto fala "Left"/"Right" (o vocabulario do
+# MediaPipe), e a traducao acontece na borda -- a interface. Traduzir os rotulos
+# la dentro obrigaria todo o codigo a lidar com dois idiomas.
+LADO_PT: dict[str, str] = {"Left": "Esquerda", "Right": "Direita"}
+
 
 def texto(
     frame: np.ndarray,
@@ -154,10 +159,12 @@ def desenhar_mao(frame: np.ndarray, mao: Mao, *, mostrar_indices: bool = False) 
             texto(frame, str(i), (px + 6, py - 6), escala=0.35, cor=AMARELO)
 
     # Rotulo do lado, ancorado no pulso.
+    # `mao.lado` ja e a mao REAL do usuario (corrigida pelo espelho em
+    # hands._lado_real). Aqui so traduzimos para portugues, para exibir.
     px, py = pontos[0]
     texto(
         frame,
-        f"{mao.lado} {mao.confianca_lado:.0%}",
+        f"{LADO_PT.get(mao.lado, mao.lado)} {mao.confianca_lado:.0%}",
         (px - 20, py + 24),
         escala=0.5,
         cor=cor,
