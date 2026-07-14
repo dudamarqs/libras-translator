@@ -271,3 +271,89 @@ queimando CPU):
    modelo às cegas: é **desacoplar** captura e inferência em threads, ou usar o
    modo `LIVE_STREAM` do MediaPipe (que é assíncrono justamente para isto).
    Fica para a Etapa 16.
+
+---
+
+## ADR-009 — Modo `VIDEO` do HandLandmarker (e por que isso é rápido)
+
+**Data:** 2026-07-14 · **Status:** aceito
+
+**O que é preciso entender primeiro.** O `HandLandmarker` **não é um modelo, são
+dois**:
+
+1. **palm detector** — varre o frame **inteiro** procurando "onde tem mão?". Caro.
+2. **landmark model** — recebe um *recorte* que já contém a mão e devolve os 21
+   pontos. Barato.
+
+Rodar os dois em todo frame seria lento demais para tempo real. O MediaPipe roda
+o detector **uma vez**, acha a mão, e nos frames seguintes usa a posição anterior
+para recortar a região e rodar **só o modelo barato**. Ele é um **tracker**. Só
+volta a chamar o detector caro quando **perde** o rastreamento.
+
+**Decisão.** Usar `running_mode=VIDEO` (mantém estado entre frames ⇒ o tracker
+funciona), e **não** `IMAGE` (trata cada frame como foto isolada ⇒ o detector
+caro roda **sempre**).
+
+**Os dois parâmetros de confiança, que sempre confundem:**
+
+| parâmetro | quando age | significado |
+| --------- | ---------- | ----------- |
+| `min_hand_detection_confidence` | quando o **detector** roda | quão certo preciso estar de que isto é uma mão para começar a rastrear |
+| `min_tracking_confidence` | em **todo frame rastreado** | abaixo disto eu desisto e chamo o detector caro de novo |
+
+**Armadilhas encontradas na prática:**
+
+1. **Timestamps.** O modo `VIDEO` exige timestamps **estritamente crescentes**.
+   Repetir ou regredir um levanta exceção com mensagem inútil. Por isso o
+   `DetectorMaos` mantém o próprio contador em vez de confiar em quem chama.
+2. **Cold start.** A primeira inferência carrega os pesos, aloca buffers nativos
+   e inicializa o delegate XNNPACK — custa **várias vezes** o normal. Isso
+   envenenou a primeira versão do `bench_maos.py` (primeiro cenário mediu 55 ms
+   contra 16 ms dos demais: era cold start disfarçado de resultado). O
+   aquecimento agora acontece dentro do `DetectorMaos.abrir()`, para que ninguém
+   possa esquecer.
+3. **Benchmark sem mão no quadro não mede nada.** Sem mão, o tracker não tem o
+   que rastrear ⇒ o modo `VIDEO` também roda o detector em todo frame ⇒ os dois
+   modos fazem **o mesmo trabalho**. O `bench_maos.py` agora se **recusa a
+   concluir** se a mão aparecer em menos de 80% dos frames. Um benchmark que
+   produz um número mesmo quando a premissa não vale é pior que benchmark nenhum:
+   alguém vai citar esse número depois.
+4. **Os avisos `W0000` do MediaPipe não são suprimíveis por variável de
+   ambiente.** A tentativa óbvia (`GLOG_minloglevel=2` antes do import) **não
+   funciona**: o MediaPipe migrou de `glog` para o logging do `absl`, que ignora
+   essa variável. E `contextlib.redirect_stderr` também não pega — ele só troca
+   o objeto `sys.stderr` do **Python**, enquanto o C++ escreve **direto no file
+   descriptor 2**. A solução real é `os.dup2` (nível de SO), aplicada **apenas**
+   durante a abertura do modelo — silenciar o stderr permanentemente esconderia
+   erros de verdade.
+
+---
+
+## ADR-010 — `hand_world_landmarks` como base das features
+
+**Data:** 2026-07-14 · **Status:** aceito
+
+**Problema.** O MediaPipe devolve os 21 pontos em **dois espaços de coordenadas**.
+Qual usar como feature do classificador?
+
+| campo | espaço | bom para |
+| ----- | ------ | -------- |
+| `hand_landmarks` | normalizado 0..1 **pela imagem** | **desenhar** (multiplica por largura/altura ⇒ pixel) |
+| `hand_world_landmarks` | **métrico 3D, em metros**, origem no centro da mão | **features** |
+
+**Decisão.** `hand_world_landmarks` alimenta o modelo; `hand_landmarks` só
+desenha.
+
+**Racional.** Os landmarks normalizados pela imagem mudam **todos** quando você
+anda para o lado ou se aproxima da câmera — embora o sinal seja exatamente o
+mesmo. Um classificador treinado neles teria que *aprender* a ignorar posição e
+escala, e para isso precisaria de muito mais dados.
+
+Os `world landmarks` já vêm **invariantes a translação e a escala**: mesma mão,
+mesma pose, números praticamente iguais, independentemente de onde ela esteja no
+quadro. Metade do trabalho de *feature engineering* vem pronta — **de graça**,
+por usarmos um modelo pré-treinado. Isso é o ADR-001 pagando dividendos.
+
+**O que ainda falta** (fica para a Etapa 7): eles **não** são invariantes a
+**rotação**. Inclinar a mão muda os números. Vamos ter que decidir se
+normalizamos a rotação ou se deixamos o modelo aprender a lidar com ela.

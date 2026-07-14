@@ -16,12 +16,15 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from libras.vision.hands import CONEXOES, Mao
+
 # BGR, nao RGB -- estamos no mundo do OpenCV.
 BRANCO = (255, 255, 255)
 PRETO = (0, 0, 0)
 VERDE = (80, 220, 100)
 AMARELO = (60, 200, 250)
 VERMELHO = (70, 70, 240)
+AZUL = (240, 160, 60)
 CINZA = (150, 150, 150)
 
 _FONTE = cv2.FONT_HERSHEY_SIMPLEX
@@ -115,4 +118,56 @@ def barra_confianca(
     cv2.line(frame, (marca, y - 2), (marca, y + altura + 2), BRANCO, 1)
 
     texto(frame, f"{valor:.0%}", (x + largura + 8, y + altura), escala=0.5, cor=cor)
+    return frame
+
+
+def desenhar_mao(frame: np.ndarray, mao: Mao, *, mostrar_indices: bool = False) -> np.ndarray:
+    """Desenha o esqueleto de 21 pontos de uma mao.
+
+    Usa `mao.landmarks` (normalizado pela imagem, 0..1) -- e NAO `mao.world`.
+    Este e o unico lugar do projeto onde os landmarks normalizados sao os
+    corretos: eles sao relativos ao FRAME, entao basta multiplicar pela largura
+    e pela altura para virar pixel.
+
+    O `world` (metrico, em metros, com origem no centro da mao) nao tem relacao
+    nenhuma com a posicao na tela -- desenhar com ele produziria uma mao
+    grudada no canto superior esquerdo. Cada espaco tem o seu uso.
+    """
+    altura, largura = frame.shape[:2]
+
+    # (21, 3) normalizado -> (21, 2) em pixels.
+    pontos = (mao.landmarks[:, :2] * np.array([largura, altura], dtype=np.float32)).astype(int)
+
+    cor = VERDE if mao.lado == "Right" else AZUL
+
+    for inicio, fim in CONEXOES:
+        cv2.line(frame, tuple(pontos[inicio]), tuple(pontos[fim]), cor, 2, cv2.LINE_AA)
+
+    for i, (px, py) in enumerate(pontos):
+        # As pontas dos dedos (4, 8, 12, 16, 20) sao os pontos que mais
+        # distinguem um sinal do outro -- destacamos para voce ver isso.
+        e_ponta = i in (4, 8, 12, 16, 20)
+        cv2.circle(frame, (px, py), 5 if e_ponta else 3, BRANCO, -1, cv2.LINE_AA)
+        cv2.circle(frame, (px, py), 5 if e_ponta else 3, PRETO, 1, cv2.LINE_AA)
+
+        if mostrar_indices:
+            texto(frame, str(i), (px + 6, py - 6), escala=0.35, cor=AMARELO)
+
+    # Rotulo do lado, ancorado no pulso.
+    px, py = pontos[0]
+    texto(
+        frame,
+        f"{mao.lado} {mao.confianca_lado:.0%}",
+        (px - 20, py + 24),
+        escala=0.5,
+        cor=cor,
+    )
+    return frame
+
+
+def desenhar_maos(
+    frame: np.ndarray, maos: tuple[Mao, ...], *, mostrar_indices: bool = False
+) -> np.ndarray:
+    for mao in maos:
+        desenhar_mao(frame, mao, mostrar_indices=mostrar_indices)
     return frame
