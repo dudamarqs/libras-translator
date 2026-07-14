@@ -187,3 +187,87 @@ False
    bug: a fonte da verdade passa a ser a API instalada, não um vídeo de 2023.
 
 **Custo.** API mais verbosa e um asset externo para gerenciar.
+
+---
+
+## ADR-007 — Backend de captura MSMF (escolhido por medição, não por intuição)
+
+**Data:** 2026-07-14 · **Status:** aceito
+
+**Problema.** Qual backend do OpenCV usar para abrir a webcam no Windows?
+
+**O que eu decidi primeiro, e errado.** `cv2.CAP_DSHOW` (DirectShow), com este
+comentário confiante no código: *"no Windows, o backend padrão (MSMF) costuma
+levar ~2s para abrir a câmera; DirectShow abre instantaneamente"*. O comentário
+está **factualmente correto**. A decisão está **errada**.
+
+**O que a medição mostrou** (`scripts/bench_camera.py`, 640×480, nesta máquina):
+
+| backend | FPS real | ms/frame | codec |
+| ------- | -------- | -------- | ----- |
+| **MSMF**  | **30.0** | **33.4** | (negociado) |
+| DSHOW   | 15.0     | 66.6     | YUY2  |
+| ANY     | 25.0     | 40.1     | —     |
+
+O DirectShow ficava preso em **YUY2** — vídeo **não comprimido**, ~614 KB por
+frame. A 30 FPS isso seriam ~18 MB/s no barramento USB; o driver, para não
+estourar a banda, **corta a taxa pela metade**. E ele ignorava tanto o pedido de
+30 FPS quanto a troca para MJPG: aceitava a chamada e continuava entregando 15.
+
+**Decisão.** `cv2.CAP_MSMF` como padrão (`CameraConfig.backend`). Em Linux/Mac,
+`cv2.CAP_ANY`.
+
+**Racional.** Otimizei a coisa errada. **Abrir a câmera acontece uma vez; ler
+frames acontece 30 vezes por segundo, para sempre.** Trocar 2 segundos de
+inicialização por metade do FPS — permanentemente — é um péssimo negócio.
+
+**A lição que fica.** Eu tinha um motivo plausível, escrito com convicção num
+comentário, e ele me levou à escolha errada. O que corrigiu isso não foi
+raciocínio melhor: foi **medir**. É exatamente por isso que o `Cronometro`
+existe *antes* de o MediaPipe entrar no loop. E é por isso que
+`scripts/bench_camera.py` está versionado: em outra máquina o vencedor pode ser
+outro, e a resposta certa é rodar de novo — não confiar neste ADR.
+
+---
+
+## ADR-008 — Modelo de custo do loop: `max()`, não soma
+
+**Data:** 2026-07-14 · **Status:** aceito (é um fato medido, não uma escolha)
+
+**O erro de raciocínio.** É natural pensar que o tempo de um frame é
+`captura + mediapipe + modelo`, e concluir que, se a captura já custa 33 ms, não
+sobra nada para a IA. **Errado.**
+
+`cap.read()` não *gasta* CPU: ele fica **bloqueado esperando** a câmera produzir
+o próximo frame. Se o processamento levar 20 ms, a câmera trabalhou *durante*
+esses 20 ms, e o `read()` seguinte retorna quase instantâneo. Com
+`CAP_PROP_BUFFERSIZE = 1` (descartar frames velhos), o loop se estabiliza em:
+
+```
+tempo_do_frame  ≈  max( período_da_câmera , tempo_de_processamento )
+```
+
+**Medido** (câmera a 30 FPS ⇒ período de 33,3 ms; processamento simulado
+queimando CPU):
+
+| processamento | FPS medido |
+| ------------- | ---------- |
+| 0 ms          | 29.6       |
+| 10 ms         | 29.5       |
+| 20 ms         | 29.5       |
+| 30 ms         | 29.5       |
+| 40 ms         | 20.0       |
+| 60 ms         | 13.4       |
+
+**Consequências para o projeto.**
+
+1. **O MediaPipe tem ~33 ms de folga, e usá-los é grátis.** Enquanto o
+   processamento couber no período da câmera, o FPS não cai *nada*.
+2. **A degradação não é suave — ela quantiza.** Passando de 33 ms, você perde o
+   "trem" do frame e espera o próximo inteiro. Por isso 40 ms derrubou para 20
+   FPS (e não para os 25 que uma regra de três ingênua previa). Fique
+   confortavelmente **abaixo** do limite, não em cima da linha.
+3. **Se um dia o processamento passar de 33 ms**, a saída não é otimizar o
+   modelo às cegas: é **desacoplar** captura e inferência em threads, ou usar o
+   modo `LIVE_STREAM` do MediaPipe (que é assíncrono justamente para isto).
+   Fica para a Etapa 16.
