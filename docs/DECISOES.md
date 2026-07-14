@@ -115,3 +115,75 @@ Um único ponto de definição torna esse bug impossível de escrever.
 
 **Custo.** Uma camada de indireção a mais e a necessidade do `pip install -e .`
 no setup.
+
+---
+
+## ADR-005 — Um único pacote de OpenCV (`opencv-contrib-python`)
+
+**Data:** 2026-07-14 · **Status:** aceito
+
+**Problema.** O `doctor.py` acusou `cv2.__version__ == "5.0.0"` num ambiente onde
+`requirements.txt` pinava `opencv-python==4.12.0.88`. O `pip list` mostrava
+**os dois** instalados:
+
+```
+opencv-contrib-python     5.0.0.93
+opencv-python             4.12.0.88
+```
+
+**Causa.** `opencv-python` e `opencv-contrib-python` são pacotes distintos que
+instalam **o mesmo módulo** (`site-packages/cv2/`). O pip não os trata como
+conflitantes, então instala ambos — e o último a gravar no disco **sobrescreve**
+os arquivos do outro. O resultado é um venv em estado misto: os metadados do pip
+dizem uma coisa e o `import cv2` faz outra. O MediaPipe depende de
+`opencv-contrib-python`, e foi ele quem trouxe a 5.0 por cima.
+
+**Decisão.** Usar **exclusivamente** `opencv-contrib-python==4.12.0.88`.
+Remover `opencv-python` do `requirements.txt`. Ao corrigir, desinstalar **os
+dois** e reinstalar do zero — desinstalar só um deixa arquivos órfãos do outro
+no diretório `cv2/`.
+
+**Por que a série 4.x e não a 5.0.** A 5.0 é recém-lançada e removeu/renomeou
+APIs. Toda a documentação, todo o Stack Overflow e todo tutorial de visão
+computacional ainda assume 4.x. Num projeto cujo objetivo é aprender, **estar
+alinhado com a documentação do mundo vale mais do que estar na versão mais nova.**
+
+**Custo.** O `contrib` é ~30 MB maior (traz módulos extras que não usamos). É um
+preço trivial pela integridade do ambiente — e não havia escolha, já que o
+MediaPipe exige o contrib.
+
+---
+
+## ADR-006 — API `tasks` do MediaPipe (a `solutions` não existe mais)
+
+**Data:** 2026-07-14 · **Status:** aceito
+
+**Problema.** Praticamente toda a literatura de "reconhecimento de sinais com
+MediaPipe" usa `mp.solutions.hands.Hands()`. No **mediapipe 0.10.35**,
+`mp.solutions` **não existe** — foi removido. Verificado em ambiente:
+
+```python
+>>> import mediapipe as mp
+>>> hasattr(mp, "solutions")
+False
+```
+
+**Decisão.** Usar a API `mediapipe.tasks.python.vision` (`HandLandmarker`,
+`PoseLandmarker`, `HolisticLandmarker`).
+
+**Consequências.**
+
+1. **O modelo não vem mais no pacote.** É preciso baixar um arquivo `.task` e
+   apontar o caminho dele nas options. Isso vira um passo de setup
+   (`scripts/download_models.py`) e um item do `.gitignore`.
+2. **Ganhamos o modo `LIVE_STREAM`**: inferência assíncrona com callback,
+   projetada para vídeo ao vivo — não bloqueia o loop de captura. É o modo
+   correto para o nosso caso de uso.
+3. **Ganhamos um caminho para o navegador**: o mesmo arquivo `.task` roda em
+   JS via `@mediapipe/tasks-vision`. Isso mantém aberta a otimização da Etapa 16
+   (extrair os landmarks no cliente e mandar só ~126 floats pro backend, em vez
+   de um JPEG por frame).
+4. **Nenhum tutorial de terceiros vai copiar-e-colar.** É uma feature, não um
+   bug: a fonte da verdade passa a ser a API instalada, não um vídeo de 2023.
+
+**Custo.** API mais verbosa e um asset externo para gerenciar.

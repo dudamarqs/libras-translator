@@ -104,10 +104,21 @@ secao("4. PyTorch")
 try:
     import torch
 
-    x = torch.randn(4, 3)
-    y = (x @ x.T).sum()
-    y.backward if x.requires_grad else None
-    ok(f"tensores funcionam (device padrao: cpu, resultado shape {tuple((x @ x.T).shape)})")
+    # Testar tensor nao basta -- o que precisa funcionar e o AUTOGRAD, o motor
+    # que calcula os gradientes. Sem ele nao existe treinamento.
+    #
+    # requires_grad=True diz: "rastreie todas as operacoes feitas sobre x".
+    # O torch monta um grafo dessas operacoes; .backward() percorre esse grafo
+    # de tras pra frente aplicando a regra da cadeia (isso E o backpropagation)
+    # e deposita d(perda)/dx dentro de x.grad.
+    x = torch.randn(4, 3, requires_grad=True)
+    perda = (x @ x.T).sum()
+    perda.backward()
+
+    if x.grad is None or x.grad.shape != x.shape:
+        erro("autograd nao preencheu os gradientes -- treinamento nao vai funcionar")
+    else:
+        ok(f"tensores + autograd OK (backward preencheu x.grad, shape {tuple(x.grad.shape)})")
 
     if torch.cuda.is_available():
         ok(f"GPU CUDA disponivel: {torch.cuda.get_device_name(0)}")
@@ -120,36 +131,61 @@ except Exception as exc:  # noqa: BLE001
     erro(f"torch: {type(exc).__name__}: {exc}")
 
 # ---------------------------------------------------------------------------
-secao("5. MediaPipe: qual API esta disponivel?")
+secao("5. MediaPipe: API de visao")
 # ---------------------------------------------------------------------------
-# O MediaPipe tem DUAS APIs:
-#   - "solutions" (legada): mp.solutions.hands.Hands() -- simples, sem baixar modelo.
-#   - "tasks" (atual):      HandLandmarker -- exige o arquivo .task, e o caminho
-#                            para rodar o MESMO modelo no navegador depois.
-# Precisamos saber qual a versao instalada oferece antes de escrever a Etapa 4.
+# O MediaPipe TINHA duas APIs:
+#   - "solutions" (legada): mp.solutions.hands.Hands() -- REMOVIDA na 0.10.35.
+#   - "tasks" (atual):      HandLandmarker + arquivo .task baixado a parte.
+# Quase todo tutorial de Libras na internet usa a `solutions` e NAO roda aqui.
+# Ver ADR-006. Este check existe para que isso nunca mais seja surpresa.
 try:
     import mediapipe as mp
 
-    tem_solutions = hasattr(mp, "solutions") and hasattr(mp.solutions, "hands")
-    tem_tasks = hasattr(mp, "tasks") and hasattr(mp.tasks, "vision")
+    if hasattr(mp, "solutions"):
+        aviso(
+            "esta versao ainda expoe a API legada `mp.solutions`. "
+            "Ignore-a: o projeto usa `mp.tasks` (ver ADR-006)."
+        )
 
-    if tem_solutions:
-        ok("API 'solutions' (legada) disponivel: mp.solutions.hands")
-    else:
-        aviso("API 'solutions' (legada) NAO disponivel nesta versao")
+    from mediapipe.tasks.python import vision
 
-    if tem_tasks:
-        ok("API 'tasks' (atual) disponivel: mp.tasks.vision.HandLandmarker")
-    else:
-        aviso("API 'tasks' NAO disponivel nesta versao")
-
-    if not tem_solutions and not tem_tasks:
-        erro("nenhuma API de visao do MediaPipe disponivel")
+    for classe in ("HandLandmarker", "PoseLandmarker", "HolisticLandmarker"):
+        if hasattr(vision, classe):
+            ok(f"mp.tasks.python.vision.{classe} disponivel")
+        else:
+            erro(f"mp.tasks.python.vision.{classe} AUSENTE")
 except Exception as exc:  # noqa: BLE001
     erro(f"mediapipe: {type(exc).__name__}: {exc}")
 
 # ---------------------------------------------------------------------------
-secao("6. Webcam")
+secao("6. Um unico pacote de OpenCV")
+# ---------------------------------------------------------------------------
+# `opencv-python` e `opencv-contrib-python` instalam o MESMO modulo cv2/.
+# Com os dois instalados, um sobrescreve o outro no disco e o ambiente fica
+# num estado misto: o pip diz uma versao, o `import cv2` usa outra. Ver ADR-005.
+try:
+    from importlib.metadata import distributions
+
+    instalados = sorted(
+        d.metadata["Name"]
+        for d in distributions()
+        if (d.metadata["Name"] or "").startswith("opencv")
+    )
+    if len(instalados) == 1:
+        ok(f"apenas um pacote OpenCV instalado: {instalados[0]}")
+    elif len(instalados) == 0:
+        erro("nenhum pacote OpenCV encontrado")
+    else:
+        erro(
+            f"MAIS DE UM pacote OpenCV instalado: {instalados}. "
+            "Eles se sobrescrevem. Desinstale TODOS e reinstale so o "
+            "opencv-contrib-python (ver ADR-005)."
+        )
+except Exception as exc:  # noqa: BLE001
+    erro(f"checagem de opencv: {type(exc).__name__}: {exc}")
+
+# ---------------------------------------------------------------------------
+secao("7. Webcam")
 # ---------------------------------------------------------------------------
 try:
     import cv2
@@ -175,7 +211,7 @@ except Exception as exc:  # noqa: BLE001
     erro(f"webcam: {type(exc).__name__}: {exc}")
 
 # ---------------------------------------------------------------------------
-secao("7. Pacote `libras` importavel")
+secao("8. Pacote `libras` importavel")
 # ---------------------------------------------------------------------------
 try:
     import libras

@@ -21,8 +21,15 @@ frontend/dist/
 # vira um repositorio de 5 GB, para sempre, mesmo que voce delete o arquivo.
 # Datasets e checkpoints ficam FORA do Git (na Etapa 6 discutimos DVC).
 # O ".gitkeep" preserva a pasta vazia na arvore do repo.
+# Pegadinha do .gitignore: se voce ignora "datasets/*", o Git nem DESCE na
+# pasta datasets/raw/ -- entao a negacao "!datasets/raw/.gitkeep" nunca chega
+# a ser avaliada. E preciso reabrir o diretorio (!datasets/raw/) antes de
+# poder negar um arquivo dentro dele.
 datasets/*
-!datasets/.gitkeep
+!datasets/raw/
+!datasets/processed/
+datasets/raw/*
+datasets/processed/*
 !datasets/raw/.gitkeep
 !datasets/processed/.gitkeep
 

@@ -4,10 +4,18 @@
 # ---------------------------------------------------------------------------
 
 # --- Visao Computacional ---------------------------------------------------
-# opencv-python: captura da webcam, manipulacao e desenho sobre frames.
-#   Usamos o pacote "-python" (nao o "-contrib") porque nao precisamos dos
-#   modulos extras/patenteados (SIFT, SURF). Menos peso, menos superficie.
-opencv-python==4.12.0.88
+# opencv: captura da webcam, manipulacao e desenho sobre frames.
+#
+#   ARMADILHA: `opencv-python` e `opencv-contrib-python` sao pacotes DIFERENTES
+#   que instalam o MESMO modulo (site-packages/cv2/). Eles nao se declaram
+#   conflitantes, entao o pip instala os dois -- e o ultimo a gravar no disco
+#   SOBRESCREVE o outro. O `pip list` mostra um, o `import cv2` usa o outro.
+#   O mediapipe depende de opencv-contrib-python, entao NAO tem escolha:
+#   usamos SO o contrib. Nunca liste os dois. Ver ADR-005.
+#
+#   Serie 4.x (e nao a 5.0, recem-lancada) porque a 5.0 removeu/renomeou APIs
+#   e toda a documentacao existente de OpenCV ainda assume 4.x.
+opencv-contrib-python==4.12.0.88
 
 # mediapipe: modelos pre-treinados do Google que extraem os landmarks
 #   (as coordenadas 3D das articulacoes) de mao, pose e rosto.
