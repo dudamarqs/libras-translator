@@ -407,3 +407,85 @@ A consistência treino/serving está preservada — que era a preocupação orig
 armadilha esperando alguém — inclusive o você de daqui a três meses, montando o
 dataset. **"É uma convenção" não é desculpa para um nome mentir.** E, mais
 importante: quando as duas opções óbvias são ruins, procure a terceira.
+
+---
+
+## ADR-012 — Normalizar translação e escala; **preservar a rotação**
+
+**Data:** 2026-07-14 · **Status:** aceito
+
+**Problema.** O `hand_world_landmarks` (ADR-010) já resolve a **posição no
+quadro**. Sobram duas fontes de variação que não têm nada a ver com o sinal:
+
+1. **Escala.** Os valores vêm em **metros reais**. Uma criança tem a mão ~30%
+   menor: mesmo sinal, todos os números 30% menores — e o modelo veria dois
+   gestos diferentes.
+2. **Rotação.** Inclinar a mão muda todos os números.
+
+**Decisão.**
+
+| transformação | o que fazemos | por quê |
+| ------------- | ------------- | ------- |
+| **translação** | recentrar no **pulso** | o "centro geométrico" do MediaPipe é uma média dos 21 pontos e **se move quando os dedos dobram**. Um referencial que se mexe não é referencial. O pulso é uma **âncora anatômica**. |
+| **escala** | dividir pela distância **pulso → base do dedo médio** | torna a mão **adimensional**: importa a *proporção* entre os pontos, não o tamanho |
+| **rotação** | **NÃO normalizar** | ver abaixo |
+
+**Por que a régua é pulso → base do médio, e não pulso → ponta do médio.**
+A régua tem que depender **só do tamanho da mão, nunca do gesto**. Pulso → base
+do médio atravessa a **palma**, que é rígida: mede o mesmo com o punho fechado
+ou a mão aberta. Já pulso → **ponta** do médio varia de ~18 cm (mão aberta) a
+~8 cm (punho fechado) — depende do **gesto**. Usá-la faria o punho fechado
+parecer uma mão aberta gigante. *Uma régua não pode depender daquilo que ela
+mede.*
+
+**Por que NÃO normalizamos a rotação — e esta é a decisão que importa.**
+
+A saída óbvia seria girar a mão para uma orientação canônica. Seria matematicamente
+elegante e **destruiria o projeto**.
+
+Um sinal em Libras tem **cinco parâmetros**: configuração de mão, ponto de
+articulação, movimento, **orientação da palma** e expressão facial. A orientação
+da palma é **gramática** — palma para dentro e palma para fora podem ser sinais
+**diferentes**. Normalizar a rotação apagaria **um dos cinco parâmetros da
+língua**, e o modelo ficaria estruturalmente cego para distinções que os
+sinalizantes usam todo dia.
+
+> A resposta certa aqui não veio da matemática. Veio de **entender o domínio**.
+> É o tipo de decisão que separa um projeto de ML de portfólio de um projeto de
+> ML de verdade — e é uma ótima resposta para "conte uma decisão técnica difícil
+> que você tomou".
+
+**Salvaguarda.** Existe um teste chamado
+`test_NAO_e_invariante_a_ROTACAO__e_isso_e_intencional`. Ele parece testar um
+defeito; não é — ele **trava a decisão**. Se alguém um dia "melhorar" a
+normalização acrescentando invariância a rotação (parece um upgrade óbvio!), o
+teste quebra e obriga a pessoa a ler este ADR antes de apagar um parâmetro da
+língua. *Um teste que protege uma decisão vale mais que um teste que confere uma
+conta.*
+
+**Custo.** O modelo terá que aprender a lidar com pequenas variações de
+inclinação sozinho — e para isso precisa vê-las no dataset. Consequência direta
+para a Etapa 6: **ao coletar, varie levemente a inclinação da mão**, ou o modelo
+só reconhecerá o sinal no ângulo exato em que foi gravado.
+
+**Layout final do vetor de entrada** (`vetor_features`, 128 dimensões):
+
+```
+[  0.. 62]  mão esquerda (21 pontos × 3 eixos, normalizados)
+[ 63..125]  mão direita  (idem)
+[126]       flag: mão esquerda presente? (0.0 / 1.0)
+[127]       flag: mão direita presente?  (0.0 / 1.0)
+```
+
+Três decisões embutidas aí:
+
+1. **Posição fixa por lado**, não por ordem de detecção. O MediaPipe **não
+   garante a ordem** das mãos, e ela muda entre frames — o mesmo sinal geraria
+   vetores diferentes. (Isto só é possível porque corrigimos a lateralidade no
+   ADR-011.)
+2. **Mão ausente = zeros.** Rede neural tem entrada de tamanho fixo.
+3. **As flags de presença existem por causa de (2)** — e são a parte que quase
+   todo mundo esquece. Sem elas, o modelo não consegue distinguir *"esta mão não
+   está no quadro"* de *"esta mão está numa pose cujos números deram perto de
+   zero"*. São situações muito diferentes que o vetor representaria de forma
+   parecida.
