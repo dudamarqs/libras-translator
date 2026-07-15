@@ -1,0 +1,52 @@
+# =============================================================================
+# REGISTRO DE SINAIS -- o catalogo declarativo do sistema.
+#
+# Este arquivo e a resposta ao seu requisito "permitir adicionar novos sinais
+# sem reescrever o sistema". Adicionar um sinal = adicionar uma linha AQUI.
+# Nenhum `if letra == "A"` espalhado pelo codigo. O coletor, o treino e a
+# inferencia leem esta lista para saber o que existe.
+#
+# Campos de cada sinal:
+#   tipo      : estatico  -> 1 frame basta (MLP). Coletavel AGORA.
+#               dinamico  -> tem movimento, precisa de sequencia (LSTM). Fase 2.
+#   categoria : letra | palavra  (a datilologia sao letras)
+#   maos      : quantas maos o sinal usa (datilologia = 1)
+#
+# NOTA HONESTA sobre estatico vs dinamico na datilologia:
+#   Algumas letras de Libras tem MOVIMENTO -- nao cabem em 1 frame. A divisao
+#   abaixo segue as referencias mais comuns (H, J, K, X, Y, Z com movimento),
+#   mas ISSO VARIA por fonte e por regiao. Nao e dogma: e um ponto de partida.
+#   Se ao coletar voce perceber que consegue fazer o "Y" parado, mude o tipo
+#   aqui -- e so editar esta linha. O codigo se adapta sozinho.
+# =============================================================================
+
+sinais:
+  # --- letras estaticas (coletaveis na fase atual) -------------------------
+  A: {tipo: estatico, categoria: letra, maos: 1}
+  B: {tipo: estatico, categoria: letra, maos: 1}
+  C: {tipo: estatico, categoria: letra, maos: 1}
+  D: {tipo: estatico, categoria: letra, maos: 1}
+  E: {tipo: estatico, categoria: letra, maos: 1}
+  F: {tipo: estatico, categoria: letra, maos: 1}
+  G: {tipo: estatico, categoria: letra, maos: 1}
+  I: {tipo: estatico, categoria: letra, maos: 1}
+  L: {tipo: estatico, categoria: letra, maos: 1}
+  M: {tipo: estatico, categoria: letra, maos: 1}
+  N: {tipo: estatico, categoria: letra, maos: 1}
+  O: {tipo: estatico, categoria: letra, maos: 1}
+  P: {tipo: estatico, categoria: letra, maos: 1}
+  Q: {tipo: estatico, categoria: letra, maos: 1}
+  R: {tipo: estatico, categoria: letra, maos: 1}
+  S: {tipo: estatico, categoria: letra, maos: 1}
+  T: {tipo: estatico, categoria: letra, maos: 1}
+  U: {tipo: estatico, categoria: letra, maos: 1}
+  V: {tipo: estatico, categoria: letra, maos: 1}
+  W: {tipo: estatico, categoria: letra, maos: 1}
+
+  # --- letras com movimento (fase dinamica / LSTM) -------------------------
+  H: {tipo: dinamico, categoria: letra, maos: 1}
+  J: {tipo: dinamico, categoria: letra, maos: 1}
+  K: {tipo: dinamico, categoria: letra, maos: 1}
+  X: {tipo: dinamico, categoria: letra, maos: 1}
+  Y: {tipo: dinamico, categoria: letra, maos: 1}
+  Z: {tipo: dinamico, categoria: letra, maos: 1}

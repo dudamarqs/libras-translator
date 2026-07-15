@@ -489,3 +489,50 @@ Três decisões embutidas aí:
    está no quadro"* de *"esta mão está numa pose cujos números deram perto de
    zero"*. São situações muito diferentes que o vetor representaria de forma
    parecida.
+
+---
+
+## ADR-013 — Formato do dataset: landmarks crus + agrupamento por sessão
+
+**Data:** 2026-07-15 · **Status:** aceito
+
+**Problema.** Como armazenar o dataset coletado da datilologia?
+
+**Três decisões, cada uma evitando um erro clássico.**
+
+**1. Guardar landmarks CRUS, não as features já normalizadas.**
+Coletar de novo exige o humano na frente da câmera — é caro. Recalcular features
+é grátis. Se a `features.py` evoluir (e ela vai — falta tratar rotação de forma
+mais esperta, decidir sobre a mão dominante etc.), com os dados crus a gente
+**reprocessa**; se tivéssemos salvo só as features, teríamos que **recoletar
+tudo**. Regra: *guarde perto do cru, derive as features na hora.* O
+pré-processamento (Etapa 7) aplica `features.py` sobre o cru — reusando a mesma
+função da inferência, sem risco de skew (ADR-004).
+
+**2. Cada sessão de gravação é um GRUPO, e isso fica gravado em cada amostra.**
+A 30 FPS, frames vizinhos são quase idênticos. Um split treino/teste aleatório
+colocaria cópias quase perfeitas nos dois lados — o teste viraria uma cópia do
+treino, e a acurácia medida seria uma mentira (*data leakage*). A defesa: o
+split é feito por **sessão inteira** (nenhuma sessão nos dois lados). Para isso,
+`DatasetBruto.grupos[i]` guarda o `session_id` da amostra `i`. Um teste
+(`test_cada_amostra_conhece_a_propria_sessao`) protege esse rastreamento.
+
+Consequência prática **para você**: faça **várias sessões**, em dias e luzes
+diferentes. É a variedade *entre* sessões que ensina o modelo a generalizar —
+não a quantidade de frames de uma sessão só.
+
+**3. Formato inspecionável e autodescritivo.** Cada sessão é uma pasta com
+`dados.npz` (arrays comprimidos) + `meta.json` (quando, qual câmera, qual commit
+de código gerou os dados). Isso é *data provenance*: daqui a seis meses você
+ainda sabe como cada amostra nasceu, e pode descartar uma sessão específica se
+descobrir que ela estava ruim.
+
+**O registro de sinais (`sinais.yaml`).** O catálogo de sinais é declarativo:
+adicionar um sinal é adicionar uma linha no YAML, lido pelo coletor, pelo treino
+e pela inferência. É o ADR-004 (fonte única) aplicado aos **metadados**. Ele
+também carrega a distinção `estatico`/`dinamico` — que é o que permite o coletor
+pular automaticamente as letras com movimento (H, J, K, X, Y, Z) na fase atual.
+
+**Custo.** Um passo de pré-processamento a mais (cru → features) antes de cada
+treino. É barato, e compramos com ele a liberdade de mudar as features sem
+recoletar — uma troca excelente.
