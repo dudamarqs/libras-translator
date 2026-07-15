@@ -536,3 +536,39 @@ pular automaticamente as letras com movimento (H, J, K, X, Y, Z) na fase atual.
 **Custo.** Um passo de pré-processamento a mais (cru → features) antes de cada
 treino. É barato, e compramos com ele a liberdade de mudar as features sem
 recoletar — uma troca excelente.
+
+---
+
+## ADR-014 — Datilologia usa o vetor de UMA mão (63d), não o de 128
+
+**Data:** 2026-07-15 · **Status:** aceito · **Descoberto por:** dados reais
+
+**O que os dados revelaram.** Na primeira coleta real (letras A B C L O, mão
+direita), o MediaPipe classificou **14 de 805 frames como "Left"** — 12 no `C`,
+2 no `O`. São letras de mão "redonda", quase simétrica, e o classificador de
+lateralidade do MediaPipe se confunde com elas (~1,7% dos frames).
+
+**Por que isso é um problema para o vetor de 128.** O `vetor_features` (ADR-012)
+ancora cada mão no bloco do seu lado (esquerda 0..62, direita 63..125). Com o
+lado errado em 14 frames, esses cairiam no bloco **errado** — o modelo veria a
+mesma letra `C` em duas regiões diferentes do vetor, com só 12 exemplos na
+região "errada". Pior: em produção, um flip de lateralidade do MediaPipe jogaria
+a predição para o bloco vazio e o modelo falharia.
+
+**Decisão.** Para sinais de **uma mão** (toda a datilologia), usar
+`vetor_uma_mao` → **63 dimensões**, a geometria da mão detectada, **ignorando o
+lado**. `normalizar_mao` não olha o lado nenhuma vez (centra no pulso, escala),
+então os 14 frames com lado errado têm features **perfeitamente válidas** — nada
+se perde. Robusto ao erro de lateralidade **por construção**.
+
+O vetor de 128 (com âncora por lado) continua correto e será usado quando
+chegarmos a sinais de **duas mãos**. Cada representação para o seu tipo de sinal.
+
+**A lição.** A âncora-por-lado parecia uma vantagem no papel (ADR-012), e é —
+para duas mãos. Foram os **dados reais** que mostraram que, para uma mão, ela é
+uma *desvantagem*. Nenhum raciocínio de mesa tinha pego isso; a coleta pegou.
+Mais uma vez: medir, não supor.
+
+**Custo.** Um modelo treinado com a mão direita vê a mão esquerda **espelhada** e
+não a reconhece. Mitigação (Etapa 8): *data augmentation* espelhando o eixo x
+sintetiza a outra mão de graça — dobra o dataset e cobre canhotos e destros.

@@ -153,6 +153,43 @@ def vetor_features(resultado: ResultadoMaos) -> np.ndarray:
     return features
 
 
+def vetor_uma_mao(resultado: ResultadoMaos) -> np.ndarray:
+    """ResultadoMaos -> (63,) float32. A entrada do modelo para sinais de UMA mao.
+
+    Esta e a representacao da DATILOLOGIA (e de qualquer sinal de uma mao).
+
+    POR QUE NAO USAMOS O VETOR DE 128 (`vetor_features`) AQUI -- e a licao que os
+    DADOS REAIS nos ensinaram:
+
+    O vetor de 128 ancora cada mao no bloco do seu LADO (esquerda 0..62, direita
+    63..125). Isso e essencial para sinais de DUAS maos, onde e preciso saber
+    qual e qual. Mas o classificador de lateralidade do MediaPipe erra ~1-2% dos
+    frames -- justamente nas maos "redondas" e quase simetricas (o C e o O foram
+    os que mais confundiram na coleta real). Num vetor de 128, esses frames
+    trocados cairiam no bloco errado, e o modelo veria a MESMA letra em duas
+    regioes diferentes do vetor. Em producao, um flip do MediaPipe mandaria a
+    predicao para o buraco.
+
+    Para um sinal de uma mao, o LADO e ruido: o que distingue as letras e a
+    GEOMETRIA da mao, que `normalizar_mao` extrai sem olhar o lado nenhuma vez.
+    Entao usamos os 63 numeros da mao detectada e ignoramos qual lado o
+    MediaPipe achou que era. Robusto ao erro de lateralidade por construcao.
+
+    Ver ADR-014.
+
+    (Limitacao conhecida: um modelo treinado com a mao direita ve a mao esquerda
+    ESPELHADA e nao a reconhece. Sinalize com a mesma mao que treinou. Na Etapa 8
+    resolvemos isso de graca com data augmentation: espelhar o eixo x sintetiza
+    a outra mao.)
+    """
+    if resultado.vazio:
+        return np.zeros(N_FEATURES_MAO, dtype=np.float32)
+    # So ha uma mao (datilologia usa max_maos=1). Se por acaso vierem duas,
+    # a de maior confianca de lado e a aposta mais segura.
+    mao = max(resultado.maos, key=lambda m: m.confianca_lado)
+    return normalizar_mao(mao.world)
+
+
 def features_de_mao(mao: Mao) -> np.ndarray:
     """Atalho para inspecionar uma mao isolada (analise, notebooks, testes)."""
     return normalizar_mao(mao.world)

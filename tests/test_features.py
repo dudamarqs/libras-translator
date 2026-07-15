@@ -23,6 +23,7 @@ from libras.vision.features import (
     escala_da_mao,
     normalizar_mao,
     vetor_features,
+    vetor_uma_mao,
 )
 from libras.vision.hands import N_LANDMARKS, Mao, ResultadoMaos
 
@@ -189,3 +190,39 @@ class TestVetorFeatures:
         v2 = vetor_features(ResultadoMaos(maos=(dir_, esq)))
 
         np.testing.assert_array_equal(v1, v2)
+
+
+class TestVetorUmaMao:
+    """A representacao de 63 dims da datilologia (ADR-014)."""
+
+    def test_sem_mao_devolve_zeros_63(self) -> None:
+        v = vetor_uma_mao(ResultadoMaos(maos=()))
+        assert v.shape == (N_FEATURES_MAO,)
+        assert np.all(v == 0.0)
+
+    def test_uma_mao_e_a_geometria_normalizada(self) -> None:
+        world = mao_sintetica()
+        v = vetor_uma_mao(ResultadoMaos(maos=(fazer_mao("Right", world),)))
+        np.testing.assert_array_equal(v, normalizar_mao(world))
+
+    def test_IGNORA_O_LADO__robusto_ao_erro_de_lateralidade(self) -> None:
+        # O ponto central do ADR-014: a MESMA geometria rotulada como "Left" ou
+        # "Right" produz features IDENTICAS. E isso que torna a datilologia imune
+        # aos ~1-2% de frames em que o MediaPipe erra o lado (visto em C e O nos
+        # dados reais).
+        world = mao_sintetica()
+        como_direita = vetor_uma_mao(ResultadoMaos(maos=(fazer_mao("Right", world),)))
+        como_esquerda = vetor_uma_mao(ResultadoMaos(maos=(fazer_mao("Left", world),)))
+        np.testing.assert_array_equal(como_direita, como_esquerda)
+
+    def test_com_duas_maos_escolhe_a_de_maior_confianca(self) -> None:
+        boa = Mao("Right", "Right", 0.99, np.zeros((N_LANDMARKS, 3), np.float32), mao_sintetica())
+        ruim = Mao(
+            "Left",
+            "Left",
+            0.51,
+            np.zeros((N_LANDMARKS, 3), np.float32),
+            mao_sintetica(deslocamento=(0.5, 0, 0)),
+        )
+        v = vetor_uma_mao(ResultadoMaos(maos=(ruim, boa)))
+        np.testing.assert_array_equal(v, normalizar_mao(boa.world))
