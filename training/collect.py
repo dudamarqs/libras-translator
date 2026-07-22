@@ -8,6 +8,26 @@ coletor grava por alguns segundos todos os frames em que UMA mao e detectada.
 Ao final, tudo vira UMA sessao em datasets/raw/<session_id>/.
 
 --------------------------------------------------------------------------
+MODO CORRECAO -- regravar letras de uma sessao QUE JA EXISTE
+--------------------------------------------------------------------------
+
+    .venv\\Scripts\\python.exe training\\collect.py \\
+        --corrigir sessao_20260721_232645 --letras "A B C D E F O"
+
+Carrega a sessao, DESCARTA as amostras antigas SO das letras regravadas,
+grava as novas e salva de volta no MESMO session_id. As demais letras nao
+sao tocadas. Serve para consertar uma letra que saiu ruim ou com poucas
+amostras, sem refazer a sessao inteira.
+
+Uma letra que voce PULAR (tecla `s`) nao e regravada nem descartada -- fica
+como estava. So se perde o que voce efetivamente regravar.
+
+RESSALVA HONESTA: regravar noutro dia/luz mistura duas condicoes dentro de
+"uma sessao", e o split por sessao supoe que cada sessao e UMA condicao. Para
+uma ou duas letras o preco e pequeno e vale muito mais que perder a sessao.
+Se metade dela estiver ruim, refazer do zero e mais honesto.
+
+--------------------------------------------------------------------------
 COMO COLETAR BEM (leia -- a qualidade do dataset e o teto do projeto)
 --------------------------------------------------------------------------
 
@@ -34,13 +54,21 @@ Teclas:  ESPACO = comecar a proxima letra   |   s = pular letra
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import time
+from datetime import UTC, datetime
 
 import cv2
 import numpy as np
 
-from libras.data.dataset import Sessao, novo_session_id, salvar_sessao
+from libras.data.dataset import (
+    RAIZ_PADRAO,
+    Sessao,
+    carregar_sessao,
+    novo_session_id,
+    salvar_sessao,
+)
 from libras.registry import registro
 from libras.vision.camera import Camera, CameraConfig, CameraError
 from libras.vision.hands import DetectorMaos
@@ -144,23 +172,46 @@ def _gravar_letra(
     return coletadas
 
 
-def _resumo(por_letra: dict[str, list]) -> None:
+def fundir_correcao(antiga: Sessao, nova: Sessao, regravadas: list[str]) -> Sessao:
+    """Substitui, na sessao `antiga`, so as letras de `regravadas` pelas de `nova`.
+
+    Publica (sem `_`) e pura de proposito: e a operacao com risco real de perda
+    de dados -- roda DEPOIS de voce ja ter gravado, e um erro aqui jogaria a
+    coleta fora. Sendo pura, da para testa-la sem camera nenhuma.
+
+    Garantias:
+      - letras fora de `regravadas` passam intactas;
+      - o session_id e o da ANTIGA (a correcao sobrescreve no lugar);
+      - a ordem final e [antigas preservadas] + [novas].
+    """
+    manter = ~np.isin(antiga.rotulo, regravadas)
+    return Sessao(
+        session_id=antiga.session_id,
+        world=np.concatenate([antiga.world[manter], nova.world]),
+        imagem=np.concatenate([antiga.imagem[manter], nova.imagem]),
+        lado=np.concatenate([antiga.lado[manter], nova.lado]),
+        rotulo=np.concatenate([antiga.rotulo[manter], nova.rotulo]),
+    )
+
+
+def _resumo(contagem: dict[str, int]) -> None:
+    """Recebe a contagem FINAL da sessao salva (letra -> n de amostras)."""
     print("\n" + "=" * 46)
     print("RESUMO DA SESSAO")
     print("=" * 46)
     print(f"{'letra':<8} {'amostras':>10}")
     print("-" * 46)
-    for letra in sorted(por_letra):
-        n = len(por_letra[letra])
+    for letra in sorted(contagem):
+        n = contagem[letra]
         alerta = "  <- poucas!" if n < MIN_AMOSTRAS_ALERTA else ""
         print(f"{letra:<8} {n:>10}{alerta}")
     print("-" * 46)
-    total = sum(len(v) for v in por_letra.values())
+    total = sum(contagem.values())
     print(f"{'TOTAL':<8} {total:>10}")
 
     # Alerta de DESBALANCEAMENTO. Um dataset onde 'A' tem 300 amostras e 'B' tem
     # 40 ensina o modelo a "chutar A quando na duvida". Balanceamento importa.
-    contagens = [len(v) for v in por_letra.values() if v]
+    contagens = [n for n in contagem.values() if n]
     if contagens and max(contagens) > 2 * min(contagens):
         print(
             "\n[ATENCAO] classes desbalanceadas (a maior tem mais que o dobro da\n"
@@ -182,7 +233,28 @@ def main() -> int:
     parser.add_argument(
         "--segundos", type=float, default=6.0, help="segundos de gravacao por letra"
     )
+    parser.add_argument(
+        "--corrigir",
+        type=str,
+        default=None,
+        metavar="SESSION_ID",
+        help="regrava letras de uma sessao existente (exige --letras)",
+    )
     args = parser.parse_args()
+
+    pasta_sessao = None
+    if args.corrigir:
+        pasta_sessao = RAIZ_PADRAO / args.corrigir
+        if not (pasta_sessao / "dados.npz").exists():
+            print(f"\nsessao nao encontrada: {pasta_sessao}")
+            return 1
+        # Sem --letras explicito, "corrigir" regravaria as 20 letras -- que e
+        # refazer a sessao inteira, nao corrigir. Exigimos a lista para que a
+        # intencao seja sempre deliberada.
+        if not args.letras.strip() or args.letras == " ".join(letras_estaticas):
+            print("\n--corrigir exige --letras com as letras a regravar.")
+            print('  exemplo: --corrigir SESSAO --letras "A B C"')
+            return 1
 
     letras = args.letras.upper().split()
     # Validamos contra o registro ANTES de abrir a camera: erro de digitacao
@@ -252,24 +324,60 @@ def main() -> int:
             lados.append(lado)
             rotulos.append(letra)
 
-    sessao = Sessao(
+    novo_world = np.array(worlds, dtype=np.float32)
+    novo_imagem = np.array(imagens, dtype=np.float32)
+    novo_lado = np.array(lados)
+    novo_rotulo = np.array(rotulos)
+
+    meta_extra = {
+        "coletor_versao": COLETOR_VERSAO,
+        "commit": _commit_atual(),
+        "camera": {"largura": largura, "altura": altura, "backend": "MSMF"},
+        "segundos_por_letra": args.segundos,
+    }
+
+    nova = Sessao(
         session_id=novo_session_id(),
-        world=np.array(worlds, dtype=np.float32),
-        imagem=np.array(imagens, dtype=np.float32),
-        lado=np.array(lados),
-        rotulo=np.array(rotulos),
-    )
-    destino = salvar_sessao(
-        sessao,
-        meta_extra={
-            "coletor_versao": COLETOR_VERSAO,
-            "commit": _commit_atual(),
-            "camera": {"largura": largura, "altura": altura, "backend": "MSMF"},
-            "segundos_por_letra": args.segundos,
-        },
+        world=novo_world,
+        imagem=novo_imagem,
+        lado=novo_lado,
+        rotulo=novo_rotulo,
     )
 
-    _resumo(por_letra)
+    if pasta_sessao is not None:
+        # MODO CORRECAO: funde com a sessao existente.
+        antiga = carregar_sessao(pasta_sessao)
+
+        # Descartamos SO as letras efetivamente regravadas. Uma letra pulada
+        # (tecla `s`) nao esta em por_letra e por isso sobrevive intacta -- o
+        # usuario nao perde nada que nao tenha refeito de proposito.
+        regravadas = sorted(por_letra)
+        sessao = fundir_correcao(antiga, nova, regravadas)
+        preservadas = sessao.n_amostras - nova.n_amostras
+        print(f"\nregravadas: {' '.join(regravadas)}")
+        print(f"amostras antigas descartadas: {antiga.n_amostras - preservadas}")
+
+        # Preserva a proveniencia da sessao original e registra a correcao --
+        # daqui a seis meses tem que dar para saber que esta sessao foi mexida,
+        # quando, e em quais letras.
+        meta_antiga = json.loads((pasta_sessao / "meta.json").read_text("utf-8"))
+        # n_amostras e contagem_por_rotulo sao recalculados por salvar_sessao.
+        derivados = ("n_amostras", "contagem_por_rotulo")
+        meta_extra = {
+            **{k: v for k, v in meta_antiga.items() if k not in derivados},
+            "corrigido_em": datetime.now(UTC).isoformat(),
+            "letras_regravadas": regravadas,
+            "correcoes": [*meta_antiga.get("correcoes", []), regravadas],
+            "commit_correcao": _commit_atual(),
+        }
+    else:
+        sessao = nova
+
+    destino = salvar_sessao(sessao, meta_extra=meta_extra)
+
+    # A contagem da SESSAO SALVA -- nos dois modos. No modo correcao ela inclui
+    # as letras que nao foram tocadas, que e justamente o que voce quer conferir.
+    _resumo(sessao.contagem())
     print(f"\nSessao salva em: {destino}")
     print("Rode o coletor de novo, outro dia, para acumular mais sessoes.\n")
     return 0
