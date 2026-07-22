@@ -572,3 +572,101 @@ Mais uma vez: medir, não supor.
 **Custo.** Um modelo treinado com a mão direita vê a mão esquerda **espelhada** e
 não a reconhece. Mitigação (Etapa 8): *data augmentation* espelhando o eixo x
 sintetiza a outra mão de graça — dobra o dataset e cobre canhotos e destros.
+
+---
+
+## ADR-015 — `LeaveOneGroupOut` como validação (e não `GroupShuffleSplit`)
+
+**Data:** 2026-07-17 · **Status:** aceito
+
+**Problema.** Com o dataset agrupado por sessão (ADR-013), como medir a acurácia
+de forma honesta e **reprodutível**?
+
+**O que estava errado antes.** A primeira medição de separabilidade deu
+*LogReg 99,8% / RandomForest 100%* — números lindos e **mentirosos**: eram um
+5-fold aleatório dentro de **uma única sessão**. A 30 FPS, frames vizinhos são
+quase gêmeos, então treino e teste continham cópias um do outro. Aquilo media
+memorização, não generalização.
+
+**Decisão.** Validar com `LeaveOneGroupOut` sobre `grupos` (o `session_id`):
+com N sessões, N dobras, e cada sessão é o conjunto de teste **exatamente uma
+vez**, treinando nas demais. Cada dobra responde à pergunta que interessa de
+verdade: *"treinei em 2 condições de luz — acerto numa terceira que nunca vi?"*
+
+**Por que não `GroupShuffleSplit`** (que era o previsto no roteiro): ele
+**sorteia** quais sessões vão para o teste. Com poucas sessões isso significa
+(a) um número que muda a cada execução, e (b) sessões que nunca são testadas. O
+`LeaveOneGroupOut` é **determinístico** e usa cada sessão como teste — logo, é
+reprodutível e comparável entre execuções. Com poucos grupos, sortear não traz
+vantagem nenhuma e custa reprodutibilidade.
+
+**Corolário que quase passou batido — o scaler mora DENTRO do pipeline.** O
+`StandardScaler` é ajustado em cada dobra de treino, nunca vendo o teste. Se
+fosse aplicado uma vez sobre o `X` inteiro antes do split, a média e o desvio
+carregariam informação do conjunto de teste — um vazamento sutil, invisível, que
+infla o resultado sem nenhum sintoma.
+
+**Resultado.** LogReg **99,7%** (desvio 0,1% entre sessões) contra RandomForest
+97,1% (desvio 2,1%). Repare que o modelo **mais simples generalizou melhor** —
+o RandomForest degradou justamente na sessão que nunca viu (94,1%).
+
+**Consequência para o roteiro.** O baseline em 99,7% deixa ~zero espaço para uma
+rede neural melhorar em 5 classes linearmente separáveis. Construir a MLP ali
+seria seguir o roteiro **traindo o princípio que o roteiro codifica** (ADR-002:
+o baseline decide se a rede vale). A MLP fica para quando o alfabeto crescer e a
+confusão entre punhos parecidos (M/N/S/T) tornar o problema não-linear.
+
+**Ressalva honesta e permanente.** As sessões são da **mesma pessoa e da mesma
+mão**. O número prova generalização entre **luz e posição**, não entre
+**pessoas**. Não anunciar "99,7%" sem essa frase junto.
+
+---
+
+## ADR-016 — Abstenção: o modelo precisa poder dizer "não sei"
+
+**Data:** 2026-07-17 · **Status:** aceito · **Descoberto por:** teste ao vivo
+
+**O que aconteceu.** Com o loop fechado funcionando, o primeiro teste real na
+webcam: a usuária **coçou a cabeça** — dedos espalhados, nada parecido com
+nenhuma letra — e o sistema cravou **`C` com 100% de confiança**. O texto
+acumulado virou `AAABCBABCOLCABO`.
+
+**Por que 100%, e por que subir o limiar NÃO resolve.** Um classificador de
+**conjunto fechado** conhece 5 formas de mão e nada além. Dada qualquer mão, ele
+é *obrigado* a escolher entre as 5 — não existe saída "nenhuma delas". Pior: num
+modelo linear, quanto **mais longe** da fronteira de decisão o ponto cai, **mais
+confiante** fica a softmax. A mão coçando estava muito fora de tudo que o modelo
+viu, e por acaso caiu do lado do `C`. Os 100% não significam "tenho certeza que é
+C"; significam "isto está longuíssimo da fronteira". **Confiança de softmax não
+mede estranheza** — por isso nenhum limiar de confiança conserta isso.
+
+**Decisão — duas defesas independentes, para dois problemas diferentes.**
+
+**1. Detecção de novidade (`libras/models/classificador.py`).** Um
+`NearestNeighbors` ajustado sobre os dados de treino **já escalados**. Na
+inferência, medimos a distância média aos K=5 vizinhos de treino mais próximos:
+perto ⇒ é uma das letras; longe ⇒ `desconhecido`, e o sistema **se recusa a
+responder**. O limiar não é número mágico — sai da própria distribuição dos
+dados (percentil 99 das distâncias intra-treino, com folga de 1,5×). É a peça
+que devolve ao sistema o direito de dizer "não sei", que a softmax nunca teve.
+
+**2. Trava de imobilidade (`scripts/reconhecer.py`).** Uma letra é um sinal
+*sustentado*; coçar a cabeça e trocar de letra são *movimento*. Só classificamos
+quando a **forma** da mão está parada — medida pela variação do vetor de features
+entre frames (invariante a posição: arrastar a mão parada pela tela não conta
+como movimento, só mudar os dedos conta). Isso resolve um sintoma diferente: a
+captura de letras no meio da transição.
+
+**Verificação.** Offline: 0% de letras reais barradas (nenhum falso
+"desconhecido") e 100% de geometria embaralhada barrada. Ao vivo: coçar a cabeça
+passou a exibir `?` vermelho, e as letras reais continuaram registrando fácil.
+
+**Custo.** O artefato salvo cresce (guarda os dados de treino escalados para o
+kNN) e há uma busca por vizinhos a cada frame — irrelevante nesta escala. O
+limiar foi calibrado contra geometria sintética, não contra poses OOD reais; o
+HUD exibe `dist:` justamente para permitir recalibrar com dados de verdade.
+
+**A lição.** A matriz de confusão nunca mostraria isso — ela só testa com A, B,
+C, L e O. O mundo real tem cabeça para coçar. **Só o teste ao vivo revela o
+comportamento fora da distribuição**, e um sistema que sabe recusar vale mais
+que um que acerta sempre no dataset.
