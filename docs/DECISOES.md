@@ -670,3 +670,53 @@ HUD exibe `dist:` justamente para permitir recalibrar com dados de verdade.
 C, L e O. O mundo real tem cabeça para coçar. **Só o teste ao vivo revela o
 comportamento fora da distribuição**, e um sistema que sabe recusar vale mais
 que um que acerta sempre no dataset.
+
+---
+
+## ADR-017 — A MLP não bate o baseline: o gargalo são os dados, não o modelo
+
+**Data:** 2026-07-28 · **Status:** aceito · **Modelo de produção continua:** LogReg
+
+**O experimento.** Construída a MLP (63 → 128 → 64 → 20, ReLU, dropout 0.3,
+weight decay), avaliada na MESMA validação do baseline (LeaveOneGroupOut por
+sessão) para comparar maçã-com-maçã.
+
+**Resultado honesto.**
+
+| métrica | LogReg (baseline) | MLP |
+| ------- | ----------------- | --- |
+| média entre sessões | 95,9% | 96,0% (empate) |
+| sessão difícil (0728) | 88,4% | 87,8% (pior) |
+| treino vs teste (fold difícil) | — | 100% vs 87,8% (**gap 12,3%**) |
+
+A MLP **memorizou o treino** (perda → 0,003, acurácia de treino 100%) sem
+generalizar melhor. Nos clusters problemáticos: 6/12 melhoraram, 3 pioraram
+(T→F 104→**136**, N→M 18→**41**), o resto empatou. Ela **reorganizou** os erros,
+não os eliminou.
+
+**Interpretação.** Se o sinal que separa T de F estivesse nas features, a rede —
+que decorou o treino a 100% — o teria usado para generalizar. Não usou. Logo o
+sinal **não está nas features de forma consistente entre sessões**. Mais
+capacidade de modelo não era o gargalo; **a informação disponível é**.
+
+**Por que isso valida o ADR-002.** Sem o baseline, "96%, matriz quase diagonal"
+pareceria um sucesso da rede. Com o baseline, sabe-se que os 96% vêm das
+features, não da MLP. O baseline é o que transforma "a rede funciona" em "a rede
+não agregou nada" — que é a verdade.
+
+**Decisões.**
+1. **Modelo de produção continua sendo o LogReg** (mais simples, mesma acurácia,
+   sem overfitting, interpretável). A MLP fica versionada como experimento
+   documentado (`libras/models/mlp.py`, `training/train_mlp.py`).
+2. Para de fato melhorar, os próximos esforços vão para **dados e features**, não
+   para arquitetura maior:
+   - mais sessões (o alfabeto tem só 2; a variação entre sessões é o que ensina
+     a generalizar);
+   - *data augmentation* (espelhamento em x + rotação sintética ±10°, legítima
+     porque as features são uma nuvem 3D métrica — ADR-012);
+   - feature engineering direcionada aos clusters (ex.: distâncias/ângulos
+     entre pontas de dedos, que descrevem cruzamento — o que separa R de U de V).
+
+**A lição.** Quando um modelo mais expressivo empata com o baseline e ainda faz
+overfitting, a resposta não é um modelo ainda maior — é olhar para os dados.
+Medir, não supor: o experimento apontou o gargalo real.
