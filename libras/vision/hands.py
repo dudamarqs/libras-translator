@@ -15,7 +15,6 @@ import contextlib
 import os
 import sys
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 
@@ -77,132 +76,28 @@ CAMINHO_MODELO_PADRAO = (
     Path(__file__).resolve().parents[2] / "models" / "mediapipe" / "hand_landmarker.task"
 )
 
-N_LANDMARKS = 21
+# As estruturas e constantes PURAS foram extraidas para libras.vision.landmarks
+# (sem dependencia do MediaPipe), para que a coleta/pre-processamento/treino
+# nao carreguem o MediaPipe so para ler um array. Reexportamos aqui para nao
+# quebrar quem ja importa de `hands`. Ver o cabecalho de landmarks.py.
+from libras.vision.landmarks import (  # noqa: E402
+    CONEXOES,
+    N_LANDMARKS,
+    NOMES_LANDMARKS,
+    Mao,
+    ResultadoMaos,
+    _lado_real,
+)
 
-# Os 21 pontos, na ordem em que o MediaPipe os devolve.
-# Vale decorar a estrutura: PULSO + 5 dedos x 4 juntas.
-# Cada dedo vai da base (CMC/MCP) ate a ponta (TIP).
-NOMES_LANDMARKS: tuple[str, ...] = (
-    "PULSO",
-    "POLEGAR_CMC", "POLEGAR_MCP", "POLEGAR_IP", "POLEGAR_PONTA",
-    "INDICADOR_MCP", "INDICADOR_PIP", "INDICADOR_DIP", "INDICADOR_PONTA",
-    "MEDIO_MCP", "MEDIO_PIP", "MEDIO_DIP", "MEDIO_PONTA",
-    "ANELAR_MCP", "ANELAR_PIP", "ANELAR_DIP", "ANELAR_PONTA",
-    "MINIMO_MCP", "MINIMO_PIP", "MINIMO_DIP", "MINIMO_PONTA",
-)  # fmt: skip
-
-# O "esqueleto" da mao: quais pontos se ligam a quais. So para desenhar.
-CONEXOES: tuple[tuple[int, int], ...] = (
-    (0, 1), (1, 2), (2, 3), (3, 4),            # polegar
-    (0, 5), (5, 6), (6, 7), (7, 8),            # indicador
-    (0, 9), (9, 10), (10, 11), (11, 12),       # medio
-    (0, 13), (13, 14), (14, 15), (15, 16),     # anelar
-    (0, 17), (17, 18), (18, 19), (19, 20),     # minimo
-    (5, 9), (9, 13), (13, 17),                 # a palma, ligando as bases
-)  # fmt: skip
-
-
-_OPOSTO: dict[str, str] = {"Left": "Right", "Right": "Left"}
-
-
-def _lado_real(lado_mediapipe: str, *, espelhado: bool) -> str:
-    """Converte a lateralidade que o MediaPipe VIU na lateralidade REAL.
-
-    Num frame espelhado, a mao direita do usuario tem a geometria de uma mao
-    esquerda -- entao o MediaPipe responde "Left". Ele nao esta errado: esta
-    descrevendo corretamente a imagem que recebeu. Quem tem que traduzir de
-    volta para o mundo real somos nos.
-
-    Se o frame NAO foi espelhado, nao ha o que corrigir.
-
-    O `.get(..., lado)` em vez de `[...]`: se um dia o MediaPipe devolver uma
-    categoria inesperada, preferimos passar o valor adiante a estourar um
-    KeyError no meio do loop de captura. Um rotulo estranho e visivel no HUD;
-    uma excecao derruba o sistema inteiro.
-    """
-    if not espelhado:
-        return lado_mediapipe
-    return _OPOSTO.get(lado_mediapipe, lado_mediapipe)
-
-
-@dataclass(slots=True, frozen=True)
-class Mao:
-    """Uma mao detectada."""
-
-    lado: str
-    """"Left" ou "Right" -- a mao REAL do usuario. Ja corrigido pelo espelho.
-
-    POR QUE PRECISA SER CORRIGIDO:
-
-    Espelhamos o frame na captura (Camera.ler) para que sinalizar nao seja
-    desorientador. O MediaPipe entao recebe o frame JA ESPELHADO e classifica a
-    lateralidade DO QUE ELE VE -- e a sua mao direita, espelhada, tem a geometria
-    de uma mao esquerda. Ele responde "Left", coerente com a imagem que recebeu,
-    e errado em relacao ao mundo.
-
-    A primeira versao deste arquivo NAO corrigia isso, com um comentario dizendo
-    que era "so uma convencao" e que troca-la criaria duas convencoes. A premissa
-    estava certa (duas convencoes = desastre); a conclusao, errada. Existe uma
-    terceira opcao: corrigir NA FRONTEIRA -- no unico ponto onde os dados do
-    MediaPipe entram no sistema. Continua havendo UMA convencao, e agora ela e
-    verdadeira.
-
-    Um campo chamado `lado` que diz "Left" para a mao direita e uma armadilha
-    esperando alguem -- inclusive voce, daqui a tres meses, montando o dataset.
-
-    IMPORTANTE: trocamos o ROTULO, nao a GEOMETRIA. Os landmarks continuam vindo
-    da imagem espelhada. A mesma mao real produz sempre a mesma geometria E o
-    mesmo rotulo, na coleta e na inferencia -- a consistencia esta preservada.
-    """
-
-    lado_bruto: str
-    """O que o MediaPipe respondeu, sem correcao. Guardado para depuracao.
-
-    Se um dia os rotulos parecerem trocados, comparar `lado` com `lado_bruto`
-    responde na hora se o problema e o espelho ou o proprio MediaPipe.
-    """
-
-    confianca_lado: float
-    """Quao certo o MediaPipe esta sobre o lado. Baixo = mao ambigua no quadro."""
-
-    landmarks: np.ndarray
-    """(21, 3) float32. Coordenadas NORMALIZADAS pela imagem.
-
-    x, y em [0, 1] -- fracao da largura/altura do frame. z e a profundidade
-    relativa ao PULSO, na mesma escala de x (negativo = mais perto da camera).
-
-    Bom para DESENHAR (multiplica por largura/altura e voce tem o pixel).
-    Ruim como FEATURE: se voce anda para o lado, todos os numeros mudam,
-    embora o sinal seja o mesmo. Use `world` para isso.
-    """
-
-    world: np.ndarray
-    """(21, 3) float32. Coordenadas METRICAS 3D, em METROS.
-
-    Origem no centro geometrico da mao. Nao dependem de onde a mao esta no
-    frame nem de quao longe da camera ela esta: o mesmo gesto produz
-    aproximadamente os mesmos numeros.
-
-    E daqui que vao sair as features do classificador (Etapa 7). Repare que
-    metade do trabalho de "feature engineering" ja vem pronto -- invariancia a
-    translacao e a escala -- de graca, por usarmos um modelo pre-treinado.
-    """
-
-    @property
-    def pulso(self) -> np.ndarray:
-        return self.landmarks[0]
-
-
-@dataclass(slots=True, frozen=True)
-class ResultadoMaos:
-    maos: tuple[Mao, ...]
-
-    @property
-    def vazio(self) -> bool:
-        return len(self.maos) == 0
-
-    def por_lado(self, lado: str) -> Mao | None:
-        return next((m for m in self.maos if m.lado == lado), None)
+__all__ = [
+    "CONEXOES",
+    "N_LANDMARKS",
+    "NOMES_LANDMARKS",
+    "CAMINHO_MODELO_PADRAO",
+    "Mao",
+    "ResultadoMaos",
+    "DetectorMaos",
+]
 
 
 class DetectorMaos:

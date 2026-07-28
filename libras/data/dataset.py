@@ -31,7 +31,9 @@ from pathlib import Path
 
 import numpy as np
 
-from libras.vision.hands import N_LANDMARKS
+# landmarks (leve), NAO hands (que carrega o MediaPipe). Ler um dataset nao pode
+# exigir uma biblioteca de visao computacional -- ver o cabecalho de landmarks.py.
+from libras.vision.landmarks import N_LANDMARKS
 
 RAIZ_PADRAO = Path(__file__).resolve().parents[2] / "datasets" / "raw"
 

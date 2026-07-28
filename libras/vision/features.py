@@ -41,7 +41,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from libras.vision.hands import N_LANDMARKS, Mao, ResultadoMaos
+# landmarks (leve, sem MediaPipe): treino e pre-processamento importam features
+# e nao podem arrastar o MediaPipe junto. Ver o cabecalho de landmarks.py.
+from libras.vision.landmarks import N_LANDMARKS, Mao, ResultadoMaos
 
 PULSO = 0
 MEDIO_MCP = 9  # a base do dedo medio -- o "centro" estavel da palma
