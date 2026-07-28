@@ -720,3 +720,48 @@ não agregou nada" — que é a verdade.
 **A lição.** Quando um modelo mais expressivo empata com o baseline e ainda faz
 overfitting, a resposta não é um modelo ainda maior — é olhar para os dados.
 Medir, não supor: o experimento apontou o gargalo real.
+
+---
+
+## ADR-018 — Augmentation de rotacao PIORA o modelo (orientacao e sinal)
+
+**Data:** 2026-07-28 · **Status:** aceito · **Nao adotar augmentation de rotacao**
+
+**Diagnostico que motivou o experimento.** Medimos que os pares confusos sao
+99-100% separaveis DENTRO de uma sessao e caem para 55-80% ENTRE sessoes -- logo
+as features nao sao cegas; o gargalo e a variacao entre sessoes. Hipotese: o gap
+e de POSE (inclinacao) -> augmentation de rotacao resolveria.
+
+**Resultado (SGDClassifier, LeaveOneGroupOut, aug 4x = espelho + rotacao +-12).**
+
+| par | sem aug | com aug | |
+| --- | ------- | ------- | - |
+| T/F | 73,2% | 80,4% | ajudou (+7%) |
+| R/U | 66,9% | 54,8% | **piorou (-12%)** |
+| U/V | 95,1% | 71,8% | **destruiu (-23%)** |
+| 20 letras | 92,5% | 90,9% | **piorou** |
+
+**Interpretacao -- a licao.** A augmentation de rotacao ensina o modelo a
+IGNORAR orientacao. Mas R/U/V se distinguem PELA orientacao/configuracao dos
+dedos (cruzados/juntos/afastados). Augmentar rotacao apaga exatamente o sinal
+que separa essas letras -- por isso o U/V, que estava otimo (95%), desabou.
+Ajudou o T/F so porque essas letras nao dependem de orientacao.
+
+Isto e o **ADR-012 mordendo de volta**: la decidimos NAO normalizar rotacao
+porque orientacao e gramatica; a augmentation de rotacao e a mesma invariancia
+por outro caminho, e faz o mesmo estrago onde a orientacao importa.
+
+**Decisao.** Nao adotar augmentation de rotacao. O espelhamento (lateralidade)
+pode ter valor isolado para robustez canhoto/destro, mas nao foi isolado aqui e
+o efeito combinado e negativo -- fica para um teste separado se/quando for
+prioridade.
+
+**Conclusao maior (fecha as Etapas 8-9).** Tres ataques ao MODELO deram a mesma
+resposta: MLP empatou (capacidade nao e o gargalo, ADR-017), augmentation piorou
+(variacao sintetica nao e a resposta), e o diagnostico mostrou separabilidade
+perfeita dentro de sessao. **O gargalo do R/U/V e a CONSISTENCIA da sinalizacao
+entre sessoes, nao o modelo.** Nenhum truque de ML conserta dados inconsistentes.
+O modelo de producao continua o LogReg. Proximos ganhos reais: (a) sinalizar
+R/U/V de forma mais consistente + mais sessoes, ou (b) deixar a camada de
+correcao por LLM (Etapa 10) absorver as confusoes residuais de letra -- um
+corretor contextual conserta "CAURO"->"CARRO" de graca.
