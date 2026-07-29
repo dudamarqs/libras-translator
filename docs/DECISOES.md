@@ -814,3 +814,39 @@ O erro residual que travou a Etapa 9 é absorvido de graça na Etapa 10.
 (`ANTHROPIC_API_KEY` ou `ant auth login`). A demo (`scripts/demo_legenda.py`)
 degrada com elegância sem isso — explica o que falta e sai, sem inventar
 resposta. A camada em si está construída e testada (13 testes, cliente falso).
+
+---
+
+## ADR-020 — Corretor offline gratuito como alternativa (e default) ao LLM
+
+**Data:** 2026-07-28 · **Status:** aceito
+
+**Problema.** A usuária perguntou: existe opção gratuita no lugar da API do
+Claude? (Máquina com pouca RAM, sem chave, projeto de portfólio.)
+
+**Respostas avaliadas.**
+- **LLM local (Ollama):** grátis em dinheiro, mas precisa de 2–4 GB de RAM que
+  ESTA máquina não tem (alocações de 5 MB falharam nas Etapas anteriores).
+- **Free tiers (Gemini, Groq):** funcionam, mas outro SDK e dados saem para
+  terceiros.
+- **Dicionário + distância de edição (`pyspellchecker`):** grátis, leve (MB),
+  100% local. **Escolhido.**
+
+**Decisão.** `libras/texto/corretor_local.py`: `CorretorLocal` corrige palavra
+por palavra contra o dicionário de frequência do português. Cumpre a MESMA
+interface `Corretor` do `CorretorLLM` (ADR-019), então é intercambiável. Uma
+`fabrica` (`criar_corretor`) escolhe automaticamente: Claude (se há SDK+chave) >
+offline (se há dicionário) > passthrough (devolve o cru). `CorretorPassthrough`
+garante que o sistema nunca fique sem legenda.
+
+**A limitação, medida na demo — e a justificativa do LLM.** O offline não tem
+contexto: `"OI TUDO BM"` → `"o tudo um"`, `"MEZA"` → `"meia"` (deveria ser
+"Oi, tudo bem?" e "mesa"). Ele conserta o óbvio de graça; **desambiguar por
+contexto, pôr acento e pontuação é o que se paga no LLM.** A demo
+(`scripts/demo_legenda.py`) mostra os dois lado a lado — o trade-off fica
+visível, sem marketing.
+
+**Consequência.** O projeto inteiro roda **de graça por padrão** (offline), e o
+Claude vira um upgrade opcional (`preferir_llm`, ou chave no ambiente). Para
+produção, o corretor local também serve de FALLBACK quando a API falha (rede,
+cota) — degradação graciosa em vez de legenda quebrada.

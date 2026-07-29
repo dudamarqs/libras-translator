@@ -58,6 +58,11 @@ pydantic-settings==2.8.1
 #   Precisa de credencial: ANTHROPIC_API_KEY no ambiente, ou `ant auth login`.
 anthropic==0.75.0
 
+# pyspellchecker: correcao offline e GRATUITA da soletracao (alternativa ao
+#   Claude quando nao ha chave/creditos). Dicionario de frequencia do portugues
+#   + distancia de edicao. Leve (poucos MB), roda 100% local. Ver ADR-020.
+pyspellchecker==0.8.3
+
 # --- Utilidades ------------------------------------------------------------
 # pyyaml: le o registry de sinais (o catalogo declarativo de sinais).
 pyyaml==6.0.2

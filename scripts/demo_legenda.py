@@ -1,67 +1,74 @@
-"""Demo da camada de IA: soletracao ruidosa -> legenda corrigida (Etapa 10).
+"""Demo da camada de legenda: soletracao ruidosa -> legenda (Etapa 10).
 
     .venv\\Scripts\\python.exe scripts\\demo_legenda.py
 
-Nao precisa de camera. Voce digita o texto SOLETRADO (como o reconhecedor
-cospe, com os erros de R/U, T/F, sem acento), e o Claude devolve a legenda.
-E a prova de conceito do produto: mostra que as confusoes que o classificador
-NAO consegue resolver (ADR-017/018) somem quando ha contexto.
+Nao precisa de camera. Voce ve a soletracao crua (como o reconhecedor cospe,
+com os erros de R/U, T/F, sem acento) corrigida por dois caminhos:
 
-Precisa de:
-  1. o SDK:   .venv\\Scripts\\python.exe -m pip install anthropic
-  2. a chave: definir ANTHROPIC_API_KEY no ambiente, ou `ant auth login`
+  - OFFLINE (gratis): dicionario do portugues + distancia de edicao. Corrige
+    palavra por palavra, SEM contexto. Roda sem chave nenhuma.
+  - CLAUDE (pago): usa o contexto da frase para desambiguar, poe acento e
+    pontuacao. So roda se houver o SDK + ANTHROPIC_API_KEY.
 
-Sem esses dois, o script explica o que falta e sai -- ele nao inventa resposta.
+O contraste e a licao: onde o gratis basta, e onde o contexto do LLM importa.
 """
 
 from __future__ import annotations
 
-from libras.texto.corretor import CorretorLLM, ErroCorretor, sdk_disponivel
+from libras.texto import CorretorLLM, CorretorLocal, ErroCorretor
+from libras.texto.corretor import sdk_disponivel
+from libras.texto.corretor_local import pyspellchecker_disponivel
 
-# Exemplos de soletracao RUIDOSA (com os erros que medimos no reconhecedor) e o
-# contexto que a legenda ja tinha. O contexto e o que desambigua.
+# Soletracao RUIDOSA (com os erros medidos no reconhecedor) + contexto que a
+# legenda ja tinha. O contexto e o que so o LLM usa.
 EXEMPLOS = [
-    ("CAURO", "Eu comprei um"),  # R->U: "carro"
-    ("OI TUDO BM", None),  # sem acento/pontuacao: "Oi, tudo bem?"
-    ("MEZA", "A comida esta na"),  # Z->S, sem acento: "mesa"
+    ("CAURO", "Eu comprei um"),  # R->U, ambiguo: carro? couro? (contexto decide)
+    ("OI TUDO BM", None),  # sem acento/pontuacao
+    ("MEZA", "A comida esta na"),  # Z->S, sem acento
     ("OBRIGADA", None),  # ja correto: so acento
 ]
 
 
-def main() -> int:
-    print("\n" + "=" * 60)
-    print("DEMO -- camada de IA da legenda (Etapa 10)")
-    print("=" * 60)
-
-    if not sdk_disponivel():
-        print(
-            "\nO pacote 'anthropic' nao esta instalado. Para rodar a demo ao vivo:\n"
-            "  .venv\\Scripts\\python.exe -m pip install anthropic\n"
-            "e defina ANTHROPIC_API_KEY (ou rode `ant auth login`).\n\n"
-            "Mesmo sem isso, a camada esta construida e testada (tests/test_corretor.py\n"
-            "usa um cliente falso). So a chamada AO VIVO e que precisa da chave.\n"
-        )
-        return 1
-
-    corretor = CorretorLLM()
-    print(
-        f"\nModelo: {corretor.modelo}   (troque para claude-haiku-4-5 se quiser\n"
-        "mais barato/rapido numa legenda de producao)\n"
-    )
-
-    print(f"{'soletrado (cru)':<18} {'contexto':<22} -> legenda")
-    print("-" * 70)
+def _linha(rotulo: str, corretor, usa_contexto: bool) -> None:
+    print(f"\n  {rotulo}")
+    print("  " + "-" * 58)
     for bruto, contexto in EXEMPLOS:
         try:
-            legenda = corretor.corrigir(bruto, contexto=contexto)
+            ctx = contexto if usa_contexto else None
+            saida = corretor.corrigir(bruto, contexto=ctx)
         except ErroCorretor as exc:
-            print(f"\nERRO: {exc}\n")
-            return 1
-        ctx = contexto or "(nenhum)"
-        print(f"{bruto:<18} {ctx:<22} -> {legenda}")
+            print(f"  ERRO: {exc}")
+            return
+        marca = f"  (contexto: {contexto})" if usa_contexto and contexto else ""
+        print(f"  {bruto:<14} -> {saida}{marca}")
 
-    print("\nRepare: 'CAURO' (R que o reconhecedor leu como U) virou 'carro' por")
-    print("causa do contexto. Nenhum ajuste de modelo resolveu isso; a IA resolve\n")
+
+def main() -> int:
+    print("\n" + "=" * 62)
+    print("DEMO -- camada de legenda (Etapa 10)")
+    print("=" * 62)
+
+    if pyspellchecker_disponivel():
+        _linha("OFFLINE (gratis, sem contexto)", CorretorLocal(), usa_contexto=False)
+    else:
+        print("\n  [offline indisponivel] pip install pyspellchecker")
+
+    if sdk_disponivel():
+        try:
+            _linha("CLAUDE (usa contexto, poe acento/pontuacao)", CorretorLLM(), usa_contexto=True)
+        except ErroCorretor as exc:
+            print(f"\n  [Claude indisponivel] {exc}")
+    else:
+        print(
+            "\n  [Claude indisponivel] para comparar com o LLM:\n"
+            "    pip install anthropic  +  defina ANTHROPIC_API_KEY"
+        )
+
+    print(
+        "\nRepare em 'CAURO': o offline chuta pela palavra mais comum e pode ir\n"
+        "para 'couro'; o Claude usa 'Eu comprei um' e acerta 'carro'. Contexto e\n"
+        "exatamente o que voce paga no LLM -- e o que o reconhecedor sozinho nao tem.\n"
+    )
     return 0
 
 

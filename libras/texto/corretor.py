@@ -37,6 +37,19 @@ from typing import Protocol
 
 MODELO_PADRAO = "claude-opus-5"
 
+
+class Corretor(Protocol):
+    """A interface que TODO corretor cumpre -- LLM ou offline.
+
+    O montador produz texto; um Corretor o transforma em legenda. Como os dois
+    corretores (Claude e o offline gratuito) implementam esta mesma interface, o
+    resto do sistema (demo, backend) fala com `Corretor` e nao sabe nem se
+    importa qual esta por tras. Trocar um pelo outro nao muda nada em volta.
+    """
+
+    def corrigir(self, texto_bruto: str, contexto: str | None = None) -> str: ...
+
+
 # O prompt de sistema e o CEREBRO desta camada. Ele descreve exatamente a
 # tarefa, os erros esperados do reconhecedor, e -- crucial -- manda responder
 # SO com o texto corrigido, sem conversa.
