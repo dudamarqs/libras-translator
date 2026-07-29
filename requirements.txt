@@ -51,6 +51,13 @@ uvicorn[standard]==0.34.0
 # pydantic-settings: configuracao tipada via .env (12-factor app).
 pydantic-settings==2.8.1
 
+# --- IA (camada de legenda, Etapa 10) --------------------------------------
+# anthropic: SDK oficial do Claude. A camada `libras/texto/corretor.py` o usa
+#   para corrigir a soletracao ruidosa em portugues natural. O import e
+#   preguicoso (so na chamada real), entao o resto do projeto roda sem ele.
+#   Precisa de credencial: ANTHROPIC_API_KEY no ambiente, ou `ant auth login`.
+anthropic==0.75.0
+
 # --- Utilidades ------------------------------------------------------------
 # pyyaml: le o registry de sinais (o catalogo declarativo de sinais).
 pyyaml==6.0.2

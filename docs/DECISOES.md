@@ -765,3 +765,52 @@ O modelo de producao continua o LogReg. Proximos ganhos reais: (a) sinalizar
 R/U/V de forma mais consistente + mais sessoes, ou (b) deixar a camada de
 correcao por LLM (Etapa 10) absorver as confusoes residuais de letra -- um
 corretor contextual conserta "CAURO"->"CARRO" de graca.
+
+---
+
+## ADR-019 — Camada de legenda: montagem (pura) separada da correção (LLM)
+
+**Data:** 2026-07-28 · **Status:** aceito
+
+**Problema.** Como transformar o fluxo de letras reconhecidas na legenda em
+português corrigido que a usuária pediu desde o início?
+
+**Decisão.** Duas peças com fronteira limpa em `libras/texto/`:
+
+1. **`montador.py` — montagem de mensagem (pura, determinística).** Acumula as
+   letras confirmadas em palavras e frase (`letra`, `fim_de_palavra`, `apagar`,
+   `texto_bruto`). Zero IA, zero rede, zero custo. Testável em milissegundos.
+2. **`corretor.py` — correção por IA (Claude).** Recebe o texto soletrado (com
+   os erros de reconhecimento) e devolve português natural, corrigido e
+   pontuado, usando o contexto das frases anteriores para desambiguar.
+
+**Por que separar.** Montar texto é mecânica previsível; corrigir contexto é
+probabilístico e pago. Juntar os dois faria você precisar de uma chave de API
+só para testar que "C-A-S-A" vira "CASA". Fronteiras limpas: o corretor consome
+o que o montador produz, e trocar o LLM não toca no montador.
+
+**A convergência que fecha as Etapas 8-10.** Os ADR-017/018 mostraram que
+nenhum ajuste de modelo (MLP, augmentation) conserta as confusões R/U/V e T/F
+do classificador. Mas essas confusões são **triviais** de corrigir quando há
+uma palavra ao redor: "CAURO" só pode ser "carro". **O gargalo do reconhecedor
+e a camada de IA que a usuária queria são o mesmo problema visto de dois lados.**
+O erro residual que travou a Etapa 9 é absorvido de graça na Etapa 10.
+
+**Decisões de engenharia (corretor):**
+
+- **Cliente injetado por dependência**, `import anthropic` **preguiçoso** (só na
+  chamada real). O módulo importa e é testável sem o SDK e sem chave — os testes
+  passam um cliente falso e verificam prompt + parsing sem gastar nada.
+- **Roda no backend, nunca no navegador** — a chave da API é segredo.
+- **Modelo `claude-opus-5`** (padrão da skill `claude-api`), configurável;
+  `claude-haiku-4-5` seria a escolha de produção por custo/latência numa legenda
+  em tempo real. **Effort `low`** pela mesma razão.
+- **Consultamos a skill `claude-api`** para o ID de modelo e os parâmetros, em
+  vez da memória — APIs de LLM mudam rápido (mesma lição do ADR-006).
+- `_extrair_texto` filtra blocos por `type == "text"` (ignora `thinking`) — ler
+  `content[0].text` às cegas é o bug clássico da API.
+
+**Custo / pendência.** Rodar ao vivo exige `pip install anthropic` + credencial
+(`ANTHROPIC_API_KEY` ou `ant auth login`). A demo (`scripts/demo_legenda.py`)
+degrada com elegância sem isso — explica o que falta e sai, sem inventar
+resposta. A camada em si está construída e testada (13 testes, cliente falso).
