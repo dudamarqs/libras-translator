@@ -19,6 +19,7 @@ from libras.texto.corretor_local import (
     CorretorPassthrough,
     pyspellchecker_disponivel,
 )
+from libras.texto.legenda import LegendaAoVivo
 from libras.texto.montador import MontadorDeMensagem
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "CorretorLocal",
     "CorretorPassthrough",
     "ErroCorretor",
+    "LegendaAoVivo",
     "MontadorDeMensagem",
     "criar_corretor",
 ]

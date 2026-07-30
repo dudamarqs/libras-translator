@@ -850,3 +850,70 @@ visível, sem marketing.
 Claude vira um upgrade opcional (`preferir_llm`, ou chave no ambiente). Para
 produção, o corretor local também serve de FALLBACK quando a API falha (rede,
 cota) — degradação graciosa em vez de legenda quebrada.
+
+---
+
+## ADR-021 — A correção sai do caminho do frame (legenda assíncrona)
+
+**Data:** 2026-07-30 · **Status:** aceito · **Etapa 11 — o circuito fechado**
+
+**Problema.** As Etapas 8–10 deixaram duas metades prontas que nunca se
+encontraram: `scripts/reconhecer.py` desenhava a soletração crua na tela, e
+`libras/texto/` (montador + corretor) só rodava numa demo sem câmera. Ligar as
+duas é o objetivo declarado do projeto — mas a ligação ingênua não funciona.
+
+O loop da câmera tem **33 ms por frame** (ADR-008). Uma correção custa muito
+mais que isso — **medido nesta máquina**:
+
+| corretor | latência | frames perdidos se chamado no loop |
+| -------- | -------- | ---------------------------------- |
+| `CorretorLocal` (dicionário) | ~580 ms (1ª chamada, carrega o dicionário) | ~17 |
+| `CorretorLLM` (Claude, rede) | 1–3 s | 30–90 |
+
+Chamar `corrigir()` dentro do loop **congela o vídeo a cada palavra**. E não há
+como consertar "deixando o corretor mais rápido": a rede não obedece.
+
+**Decisão.** `libras/texto/legenda.py` — `LegendaAoVivo` põe a correção numa
+**thread trabalhadora**. O loop só *entrega* letras e *lê* o último resultado
+pronto; nunca espera. Medido no smoke test: **0,03 ms gastos no loop** contra
+**582 ms de correção real** — quatro ordens de grandeza de separação, que é
+exatamente o valor do módulo.
+
+Enquanto a correção viaja, a tela mostra a soletração crua e um `corrigindo...`.
+Uma legenda meio segundo atrasada é o comportamento normal de legenda ao vivo de
+TV; uma legenda que trava o vídeo é um defeito.
+
+**As quatro consequências que essa escolha impôs.**
+
+1. **Slot de 1 pedido, o último vence** (não é fila). Se você soletra outra
+   palavra enquanto o Claude ainda pensa na anterior, o pedido antigo é
+   substituído. Numa legenda, uma correção que ficou obsoleta em trânsito não
+   tem valor — descartar é o comportamento certo, não uma perda.
+2. **Contador de geração.** Se a usuária limpa a tela (ou fecha a frase) com uma
+   correção em voo, o resultado **não pode** ressuscitar o texto apagado. Cada
+   pedido carrega a geração em que nasceu; ao voltar, geração diferente ⇒
+   descartado. Sem isso existiria um bug raro e confuso — a legenda "voltando do
+   nada" depois do limpar. Há teste dedicado para os dois casos.
+3. **Correção só no fim de palavra**, nunca por letra. Corrigir "C", "CA",
+   "CAS", "CASA" gastaria 4 chamadas para chegar no mesmo lugar. E o loop chama
+   `fim_de_palavra()` a **cada frame sem mão** (30×/s), então o método ignora
+   repetições — sem essa guarda, um segundo de mão fora do quadro viraria 30
+   chamadas pagas ao Claude.
+4. **Contexto limitado a 3 frases** (`nova_frase()` arquiva a atual). Mandar a
+   sessão inteira a cada pedido faria os tokens — e o custo — crescerem sem
+   limite numa conversa longa.
+
+**Pausa curta ≠ pausa longa (`PAUSA_FIM_DE_PALAVRA = 1,2 s`).** Para soletrar
+"CARRO" é preciso registrar dois R seguidos, e o único jeito é tirar a mão e
+voltar (senão o *debounce* trata como a mesma letra sustentada). Se qualquer
+pausa fechasse a palavra, "CARRO" viraria "CAR RO". Então: pausa curta libera a
+letra repetida; só pausa longa é espaço.
+
+**Testes.** 12 testes (104 no total). O que está sob teste não é a qualidade da
+correção (isso é do ADR-019/020) e sim o **contrato de tempo**: um corretor
+preso num `Event` prova que o loop continua respondendo; o `aguardar()` torna a
+concorrência determinística, sem `sleep` — teste com `sleep` é lento e falha
+sozinho numa máquina carregada.
+
+**Custo.** Uma thread por sessão e a legenda pode ficar até ~1 s atrasada em
+relação à mão. Aceito: o alternativo é vídeo travando.
