@@ -15,6 +15,15 @@ Teclas:
     ESPACO      limpar tudo
     BACKSPACE   apagar a ultima letra
     ENTER       fechar a frase (ela vira contexto e a legenda recomeca)
+    g           liga/desliga a gravacao (so com --gravar)
+
+Para gerar o GIF do README:
+
+    python scripts\\reconhecer.py --gravar
+
+    'g' comeca a gravar, 'g' de novo para. O arquivo sai em docs/demo.gif.
+    O indicador REC aparece na sua tela mas NAO entra no GIF -- ele e desenhado
+    depois da captura, de proposito.
 
 O QUE OBSERVAR:
   - A linha AMARELA e o que o reconhecedor viu (crua, com os erros de R/U e
@@ -29,7 +38,9 @@ O QUE OBSERVAR:
 
 from __future__ import annotations
 
+import argparse
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -44,6 +55,12 @@ from libras.texto import (
 )
 from libras.vision.camera import Camera, CameraConfig, CameraError
 from libras.vision.features import vetor_uma_mao
+from libras.vision.gravador import (
+    FPS_PADRAO,
+    LARGURA_PADRAO,
+    SEGUNDOS_MAX_PADRAO,
+    GravadorGif,
+)
 from libras.vision.hands import DetectorMaos
 from libras.vision.overlay import (
     AMARELO,
@@ -96,6 +113,15 @@ def _letra_grande(frame, letra: str, cor) -> None:  # noqa: ANN001
     texto(frame, letra, (w - 120, h // 2), escala=5.0, cor=cor, espessura=6)
 
 
+def _indicador_rec(frame, gravador: GravadorGif) -> None:  # noqa: ANN001
+    """Ponto REC + quanto o GIF ja dura. Desenhado DEPOIS da captura (ver o loop)."""
+    if not gravador.ativo:
+        return
+    w = frame.shape[1]
+    cv2.circle(frame, (w - 30, 30), 9, VERMELHO, -1)
+    texto(frame, f"REC {gravador.segundos:4.1f}s", (w - 165, 37), cor=VERMELHO, espessura=2)
+
+
 def _desenhar_legenda(frame, legenda: LegendaAoVivo) -> None:  # noqa: ANN001
     """Duas linhas na base: a soletracao crua e a legenda corrigida."""
     h = frame.shape[0]
@@ -130,7 +156,44 @@ def _criar_legenda() -> LegendaAoVivo:
     return LegendaAoVivo(principal, fallback=reserva)
 
 
-def main() -> int:
+def _argumentos(argv: list[str] | None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Datilologia ao vivo com legenda.")
+    p.add_argument(
+        "--gravar",
+        nargs="?",
+        # Ancorado na raiz do projeto, nao no diretorio de onde voce chamou: um
+        # caminho relativo faria o GIF cair em lugares diferentes conforme o cwd.
+        const=Path(__file__).resolve().parent.parent / "docs" / "demo.gif",
+        type=Path,
+        default=None,
+        metavar="CAMINHO",
+        help="habilita a gravacao em GIF (tecla 'g' liga e desliga). Padrao: docs/demo.gif",
+    )
+    p.add_argument(
+        "--fps",
+        type=int,
+        default=FPS_PADRAO,
+        help=f"quadros por segundo do GIF (padrao: {FPS_PADRAO}). Mais que isso incha o arquivo",
+    )
+    p.add_argument(
+        "--segundos",
+        type=float,
+        default=SEGUNDOS_MAX_PADRAO,
+        help=f"teto de duracao do GIF (padrao: {SEGUNDOS_MAX_PADRAO:.0f}s). A gravacao para "
+        "sozinha ao bater nele -- suba se a palavra for longa",
+    )
+    p.add_argument(
+        "--largura",
+        type=int,
+        default=LARGURA_PADRAO,
+        help=f"largura do GIF em pixels (padrao: {LARGURA_PADRAO}). 800 e o maximo util no "
+        "README do GitHub, e custa ~2x o tamanho",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _argumentos(argv)
     try:
         classificador = Classificador.carregar()
     except FileNotFoundError as exc:
@@ -140,6 +203,16 @@ def main() -> int:
     print(f"Modelo carregado. Letras conhecidas: {conhecidas}")
 
     config = CameraConfig()
+    gravador = (
+        GravadorGif(
+            args.gravar,
+            fps=args.fps,
+            largura=args.largura,
+            segundos_max=args.segundos,
+        )
+        if args.gravar
+        else None
+    )
     ultima_letra: str | None = None
     contagem = 0
     letra_ja_digitada: str | None = None
@@ -155,7 +228,10 @@ def main() -> int:
             DetectorMaos(max_maos=1, entrada_espelhada=config.espelhar) as detector,
             _criar_legenda() as legenda,
         ):
-            print("q/ESC = sair | ESPACO = limpar | BACKSPACE = apagar | ENTER = nova frase\n")
+            print("q/ESC = sair | ESPACO = limpar | BACKSPACE = apagar | ENTER = nova frase")
+            if gravador is not None:
+                print(f"g = gravar/parar | GIF: {gravador.caminho} ({gravador.fps} q/s)")
+            print()
 
             while True:
                 frame = cam.ler()
@@ -237,6 +313,14 @@ def main() -> int:
 
                 _desenhar_legenda(frame, legenda)
 
+                # A captura vem AQUI: depois de todo o HUD (o GIF precisa dele) e
+                # ANTES do indicador REC, que e informacao para quem grava, nao
+                # para quem assiste. Inverter as duas linhas poe um ponto
+                # vermelho no meio do GIF do README.
+                if gravador is not None:
+                    gravador.capturar(frame)
+                    _indicador_rec(frame, gravador)
+
                 cv2.imshow("Libras - datilologia ao vivo", frame)
                 tecla = cv2.waitKey(1) & 0xFF
                 if tecla in (ord("q"), 27):
@@ -247,6 +331,9 @@ def main() -> int:
                     legenda.apagar()
                 elif tecla == TECLA_ENTER:
                     legenda.nova_frase()
+                elif tecla == ord("g") and gravador is not None:
+                    estado = "gravando" if gravador.alternar() else "parado"
+                    print(f"[gif] {estado} -- {gravador.n_quadros} quadros")
 
             # Antes de sair, deixa a ultima correcao chegar: aqui bloquear e o
             # certo (nao ha mais frame para desenhar).
@@ -262,6 +349,18 @@ def main() -> int:
         return 0
 
     print(f"\nlegenda final: {final!r}")
+
+    # Fora do `with`: a camera ja fechou, e escrever o GIF leva alguns segundos.
+    if gravador is not None:
+        caminho = gravador.salvar()
+        if caminho is None:
+            print("[gif] nada gravado -- a tecla 'g' inicia a gravacao")
+        else:
+            mb = caminho.stat().st_size / 1_000_000
+            print(
+                f"[gif] {caminho}  {gravador.n_quadros} quadros, "
+                f"{gravador.segundos:.1f}s, {mb:.1f} MB"
+            )
     return 0
 
 
