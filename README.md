@@ -219,7 +219,7 @@ Requires **Python 3.12** (MediaPipe does not publish wheels for 3.13/3.14).
 
 ```powershell
 # 1. venv with Python 3.12 explicitly
-C:\Users\eduar\AppData\Local\Programs\Python\Python312\python.exe -m venv .venv
+py -3.12 -m venv .venv
 
 # 2. activate
 .venv\Scripts\Activate.ps1
